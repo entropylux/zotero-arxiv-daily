@@ -35,7 +35,8 @@ class ArxivRetriever(BaseRetriever):
             bar.update(len(batch))
             raw_papers.extend(batch)
         bar.close()
-
+        # 在 return raw_papers 前面加一行
+        raw_papers = raw_papers[:132] # 每天只看相关度最高的前132篇，免得服务器跑死
         return raw_papers
 
     def convert_to_paper(self, raw_paper:ArxivResult) -> Paper:
