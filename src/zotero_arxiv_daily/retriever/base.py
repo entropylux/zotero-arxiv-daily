@@ -21,11 +21,25 @@ class BaseRetriever(ABC):
     def retrieve_papers(self) -> list[Paper]:
         raw_papers = self._retrieve_raw_papers()
         papers = []
-        logger.info("Processing papers...")
-        with ProcessPoolExecutor(max_workers=self.config.executor.max_workers) as exec_pool:
-            papers = list(exec_pool.map(self.convert_to_paper, raw_papers))
-        return [p for p in papers if p is not None]
-
+        logger.info(f"Processing {len(raw_papers)} papers...")
+        
+        # 引入 tqdm 以显示实时进度
+        from tqdm import tqdm
+        
+        # 方案：摒弃容易死锁的 ProcessPoolExecutor，改用单线程 for 循环
+        # 这样不仅能避免 OOM，还能精准捕获导致问题的“毒论文”
+        for raw_paper in tqdm(raw_papers, desc="Processing"):
+            try:
+                p = self.convert_to_paper(raw_paper)
+                if p is not None:
+                    papers.append(p)
+            except Exception as e:
+                # 如果遇到导致崩溃的论文，会打印出错误，但不会阻断后续论文的处理
+                paper_id = getattr(raw_paper, 'id', 'Unknown ID')
+                logger.error(f"Error processing paper {paper_id}: {e}")
+                
+        return papers
+    
 registered_retrievers = {}
 
 def register_retriever(name:str):
