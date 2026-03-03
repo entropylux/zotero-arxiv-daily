@@ -79,8 +79,8 @@ class Executor:
             reranked_papers = self.reranker.rerank(all_papers, corpus)
             # 1. 先按最大数量截断（原逻辑）
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
-            # 👇 2. 新增的过滤逻辑：剔除相关性得分（score）小于等于 4.0 的论文
-            reranked_papers = [p for p in reranked_papers if p.score > 4.0]
+            # 👇 2. 新增的过滤逻辑：剔除相关性得分（score）小于等于 3.0 的论文
+            reranked_papers = [p for p in reranked_papers if p.score > 3.0]
             # 👇 3. 加一个保险机制：如果过滤后一篇都不剩了，且没有开启发送空邮件，就直接退出
             if len(reranked_papers) == 0 and not self.config.executor.send_empty:
                 logger.info("No papers matched the relevance threshold (>3.0). No email will be sent.")
