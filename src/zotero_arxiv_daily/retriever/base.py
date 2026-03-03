@@ -21,23 +21,27 @@ class BaseRetriever(ABC):
     def retrieve_papers(self) -> list[Paper]:
         raw_papers = self._retrieve_raw_papers()
         papers = []
-        logger.info(f"Processing {len(raw_papers)} papers...")
+        logger.info(f"Processing {len(raw_papers)} papers using ThreadPool...")
         
-        # 引入 tqdm 以显示实时进度
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from tqdm import tqdm
         
-        # 方案：摒弃容易死锁的 ProcessPoolExecutor，改用单线程 for 循环
-        # 这样不仅能避免 OOM，还能精准捕获导致问题的“毒论文”
-        for raw_paper in tqdm(raw_papers, desc="Processing"):
-            try:
-                p = self.convert_to_paper(raw_paper)
-                if p is not None:
-                    papers.append(p)
-            except Exception as e:
-                # 如果遇到导致崩溃的论文，会打印出错误，但不会阻断后续论文的处理
-                paper_id = getattr(raw_paper, 'id', 'Unknown ID')
-                logger.error(f"Error processing paper {paper_id}: {e}")
-                
+        # 使用 ThreadPoolExecutor（多线程）替代容易 OOM 的 ProcessPoolExecutor
+        # max_workers 建议保持默认，通常在 5-10 左右，既能提速又不会被对方 API 封 IP
+        with ThreadPoolExecutor(max_workers=self.config.executor.max_workers) as executor:
+            # 提交所有任务到线程池
+            future_to_paper = {executor.submit(self.convert_to_paper, raw): raw for raw in raw_papers}
+            
+            # as_completed 会在某个线程完成时立刻 yield，配合 tqdm 完美实现进度条
+            for future in tqdm(as_completed(future_to_paper), total=len(raw_papers), desc="Processing"):
+                try:
+                    p = future.result()
+                    if p is not None:
+                        papers.append(p)
+                except Exception as e:
+                    # 抓出毒论文或网络超时的具体报错，不影响其他论文
+                    logger.error(f"Error processing paper: {e}")
+                    
         return papers
     
 registered_retrievers = {}
