@@ -1,9 +1,11 @@
 from abc import ABC, abstractmethod
 from omegaconf import DictConfig
 from ..protocol import Paper, RawPaperItem
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed # 修改1：改为多线程
 from typing import Type
 from loguru import logger
+from tqdm import tqdm # 修改2：引入进度条
+
 class BaseRetriever(ABC):
     name: str
     def __init__(self, config:DictConfig):
@@ -21,29 +23,30 @@ class BaseRetriever(ABC):
     def retrieve_papers(self) -> list[Paper]:
         raw_papers = self._retrieve_raw_papers()
         papers = []
-        logger.info(f"Processing {len(raw_papers)} papers using ThreadPool...")
         
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from tqdm import tqdm
+        # 控制并发数，避免被目标 API 限流封禁，建议值 5 到 10
+        workers = min(10, getattr(self.config.executor, 'max_workers', 5))
+        logger.info(f"Processing {len(raw_papers)} papers using ThreadPool with {workers} workers...")
         
-        # 使用 ThreadPoolExecutor（多线程）替代容易 OOM 的 ProcessPoolExecutor
-        # max_workers 建议保持默认，通常在 5-10 左右，既能提速又不会被对方 API 封 IP
-        with ThreadPoolExecutor(max_workers=self.config.executor.max_workers) as executor:
-            # 提交所有任务到线程池
+        # 修改3：使用 ThreadPoolExecutor 替代 ProcessPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            # 提交任务到线程池
             future_to_paper = {executor.submit(self.convert_to_paper, raw): raw for raw in raw_papers}
             
-            # as_completed 会在某个线程完成时立刻 yield，配合 tqdm 完美实现进度条
+            # 配合 tqdm 实现实时进度条，同时捕获单个任务的异常
             for future in tqdm(as_completed(future_to_paper), total=len(raw_papers), desc="Processing"):
                 try:
                     p = future.result()
                     if p is not None:
                         papers.append(p)
                 except Exception as e:
-                    # 抓出毒论文或网络超时的具体报错，不影响其他论文
-                    logger.error(f"Error processing paper: {e}")
+                    # 修改4：异常隔离。单篇失败仅打印日志，不让整个程序崩溃
+                    raw = future_to_paper[future]
+                    paper_id = getattr(raw, 'id', 'Unknown ID')
+                    logger.error(f"Error processing paper {paper_id}: {e}")
                     
         return papers
-    
+
 registered_retrievers = {}
 
 def register_retriever(name:str):
