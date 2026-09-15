@@ -1,8 +1,7 @@
 name: Send emails daily
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 22 * * *'
+  # Daily delivery is scheduled locally on Windows at 09:00 Asia/Shanghai.
 
 jobs:
   calculate-and-send:

@@ -72,8 +72,7 @@ def main():
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             log_path = log_dir / f"{stamp}.log"
             secrets = [os.environ[key] for key in ("ZOTERO_KEY", "SENDER_PASSWORD", "OPENAI_API_KEY")]
-            command = [sys.executable, "-S", "-u", str(ROOT / "src/zotero_arxiv_daily/main.py"),
-                       "--config-name=local", "executor.max_paper_num=20", "hydra/job_logging=disabled"]
+            command = [sys.executable, "-S", "-u", str(ROOT / "scripts/local_worker.py")]
             started = datetime.now().isoformat()
             with log_path.open("w", encoding="utf-8") as log:
                 log.write(f"Started: {started}\n")

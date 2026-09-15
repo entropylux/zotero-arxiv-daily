@@ -9,7 +9,7 @@
 复制 `.env.local.example` 为 `.env.local`，在本地填写空白项。
 `ZOTERO_ID` 是数字用户 ID，`SENDER_PASSWORD` 是邮箱 SMTP 授权码。
 `OPENAI_API_BASE`、`OPENAI_API_KEY` 和 `LLM_MODEL` 必须来自同一可用模型服务；
-原服务曾返回余额不足，需确认有额度。代理未运行时，请清空 `ARXIV_DAILY_PROXY` 或启动代理。
+需确认所选接口接受该 Key 且有可用额度。代理未运行时，请清空 `ARXIV_DAILY_PROXY` 或启动代理。
 `.env.local`、依赖、缓存和运行记录均已加入 Git 忽略规则。
 
 ## 命令（PowerShell，在项目目录执行）
@@ -27,6 +27,7 @@ $pythonPath = 'C:\Users\ASUS\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 ```
 
 日志位于 `logs/local/`，最近一次执行状态位于 `.local-state/status.json`。
+本地入口通过 Hydra Compose API 加载配置，避开 Hydra 命令行解析器与 Python 3.14 的兼容性问题。
 成功执行过的当天自动跳过重复运行；明确需要再次推送时添加 `--force`。
 同一时间只允许一个本地实例运行。模型下载缓存保留在 `.cache/huggingface/`。
 

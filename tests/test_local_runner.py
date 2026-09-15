@@ -40,7 +40,7 @@ def test_run_records_exit_and_redacts(local_run, monkeypatch, exit_code):
 
     def launch(command, **kwargs):
         assert "-S" in command
-        assert "executor.max_paper_num=20" in command
+        assert Path(command[-1]).name == "local_worker.py"
         assert kwargs["cwd"] == local_run
         return Child()
 
