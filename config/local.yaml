@@ -29,6 +29,8 @@ llm:
     model: ${oc.env:LLM_MODEL,glm-5.3-flash}
 
 executor:
+  fulltext_workers: 3
+  llm_workers: 4
   debug: false
   source: [arxiv]
   reranker: local

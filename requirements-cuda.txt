@@ -1,0 +1,3 @@
+# Optional Windows / Python 3.14 GPU overlay; install separately with --no-deps.
+--index-url https://download.pytorch.org/whl/cu132
+torch==2.13.0+cu132

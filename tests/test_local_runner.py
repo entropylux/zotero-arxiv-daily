@@ -40,7 +40,7 @@ def test_run_records_exit_and_redacts(local_run, monkeypatch, exit_code):
 
     def launch(command, **kwargs):
         assert "-S" in command
-        assert Path(command[-1]).name == "local_worker.py"
+        assert Path(command[3]).name == "local_worker.py"
         assert kwargs["cwd"] == local_run
         return Child()
 
@@ -74,3 +74,26 @@ def test_missing_credentials_stop_before_execution(local_run, monkeypatch):
     monkeypatch.setattr(runner, "prepare", missing)
     monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: pytest.fail("Unexpected execution"))
     assert runner.main() == 2
+
+
+def test_preview_preserves_daily_success_marker(local_run, monkeypatch):
+    state = local_run / ".local-state"
+    state.mkdir()
+    status = {"success_date": datetime.now().date().isoformat()}
+    (state / "status.json").write_text(json.dumps(status))
+    monkeypatch.setattr(sys, "argv", ["run_local.py", "--preview"])
+
+    class Child:
+        stdout = []
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def wait(self): return 0
+
+    def launch(command, **kwargs):
+        assert command[-1] == "--preview"
+        return Child()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    assert runner.main() == 0
+    assert json.loads((state / "status.json").read_text()) == status
+    assert json.loads((state / "preview-status.json").read_text())["success_date"] is None

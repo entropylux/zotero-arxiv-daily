@@ -133,6 +133,15 @@ def test_send_email_starttls_success(config, monkeypatch):
     assert "text/html" in body
 
 
+def test_port_465_connects_with_ssl_immediately(config, monkeypatch):
+    config.email.smtp_port = 465
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", lambda *a, **kw: pytest.fail("Plain SMTP on TLS port"))
+    monkeypatch.setattr(smtplib, "SMTP_SSL", make_stub_smtp(sent))
+    send_email(config, "<html>ssl directly</html>")
+    assert len(sent) == 1
+
+
 def test_send_email_falls_back_to_ssl(config, monkeypatch):
     sent = []
     call_count = {"smtp": 0}

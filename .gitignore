@@ -9,6 +9,7 @@ wheels/
 .env
 .env.local
 .local-deps/
+.cuda-deps/
 .local-state/
 .cache/
 

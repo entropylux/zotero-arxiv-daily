@@ -19,17 +19,52 @@ $pythonPath = 'C:\Users\ASUS\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 # 首次安装；依赖仅写入项目目录。需要代理时为 pip 添加 --proxy 参数。
 & $pythonPath -m pip install --target .local-deps -r requirements-local.txt
 
+# 可选：NVIDIA GPU 加速（需兼容 CUDA 13.2 的驱动）。独立覆盖 CPU 版 torch。
+& $pythonPath -m pip install --target .cuda-deps --no-deps -r requirements-cuda.txt
+
 # 离线配置及导入检查，不发邮件。
 & $pythonPath scripts/run_local.py --check
 
 # 正常运行，会调用在线服务并发送邮件。
 & $pythonPath scripts/run_local.py
+
+# 完整性能验证：调用在线服务生成预览，不发送邮件，也不改变当天成功标记。
+& $pythonPath scripts/run_local.py --preview
 ```
 
 日志位于 `logs/local/`，最近一次执行状态位于 `.local-state/status.json`。
 本地入口通过 Hydra Compose API 加载配置，避开 Hydra 命令行解析器与 Python 3.14 的兼容性问题。
 成功执行过的当天自动跳过重复运行；明确需要再次推送时添加 `--force`。
 同一时间只允许一个本地实例运行。模型下载缓存保留在 `.cache/huggingface/`。
+
+## 性能配置
+
+arXiv 流程为：全部 Atom 元数据 → 摘要相关性排序 → 选取前 20 → 提取全文 → 生成摘要。
+排序输入仍是全部候选摘要；不再下载未入选论文的全文。
+本地 `executor.fulltext_workers: 3`、`executor.llm_workers: 4` 分别控制全文和模型请求的并发数。
+线程重叠网络等待，全文解析使用独立子进程；完成顺序不改变最终邮件排名。
+模型服务的并发限制仍然有效，出现限流时应降低 `llm_workers`。
+
+`reranker.local.device: auto` 优先使用 CUDA，没有可用 CUDA 时使用 CPU。
+日志会显示实际计算设备和每阶段秒数。GPU 只负责本地摘要向量计算，在线摘要生成仍由智谱处理。
+`.cuda-deps` 优先于 `.local-deps`，不需要替换全局 Python 包。
+预览结果位于 `.local-state/preview.html`，性能数据位于 `.local-state/preview-metrics.json`。
+
+### 本机实测（2026-09-15）
+
+Ryzen 9 9950X3D / RTX 5080 16GB，183 篇候选，85 篇 Zotero 参考文献，选取 20 篇。
+
+| 阶段 | 原流程 | 优化后预览 |
+| --- | ---: | ---: |
+| 全文处理 | 全部 183 篇，982 秒 | 仅前 20 篇，24 秒 |
+| 模型摘要及机构 | 串行，396 秒 | 4 并发，101 秒 |
+| 排序（包括模型启动） | CPU，约 33 秒 | CUDA，34 秒 |
+
+优化后处理阶段共 166 秒；原完整运行约 1450 秒（包括约 32 秒邮件发送）。
+预览不发邮件，网络时延和模型负载也会变化，因此不把两次总时间视为严格同条件基准。
+20 篇均获得全文、非降级摘要及机构解析结果，未出现模型限流。
+主要收益来自减少全文任务量和重叠网络等待；小批量排序受模型初始化影响，CUDA 不保证总阶段更快。
+同一批输入的 CPU/CUDA 对照入选集合相同，BF16 运算使最大分数差约 0.0093，近分数论文顺序可能不同。
 
 ## 定时任务
 

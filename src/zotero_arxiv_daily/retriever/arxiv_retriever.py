@@ -46,8 +46,8 @@ def _run_with_hard_timeout(
     operation: str,
     paper_title: str,
 ) -> T | None:
-    start_methods = multiprocessing.get_all_start_methods()
-    context = multiprocessing.get_context("fork" if "fork" in start_methods else start_methods[0])
+    # Forking a threaded parent (especially after CUDA initialization) is unsafe.
+    context = multiprocessing.get_context("spawn")
     result_queue = context.Queue()
     process = context.Process(target=_run_in_subprocess, args=(result_queue, func, args))
     process.start()
@@ -254,16 +254,34 @@ class ArxivRetriever(BaseRetriever):
         )
         return raw_papers
 
-    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        title = raw_paper.title
-        authors = [a.name for a in raw_paper.authors]
-        abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
+    def retrieve_metadata(self) -> list[Paper]:
+        raw_papers = self._retrieve_raw_papers()
+        self._raw_by_url = {p.entry_id: p for p in raw_papers}
+        return [self._metadata_to_paper(p) for p in raw_papers]
+
+    def enrich_paper(self, paper: Paper) -> None:
+        raw_paper = self._raw_by_url[paper.url]
+        paper.full_text = self._extract_full_text(raw_paper)
+
+    @staticmethod
+    def _extract_full_text(raw_paper: ArxivResult) -> str | None:
         full_text = extract_text_from_tar(raw_paper)
         if full_text is None:
             full_text = extract_text_from_html(raw_paper)
         if full_text is None:
             full_text = extract_text_from_pdf(raw_paper)
+        return full_text
+
+    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
+        paper = self._metadata_to_paper(raw_paper)
+        paper.full_text = self._extract_full_text(raw_paper)
+        return paper
+
+    def _metadata_to_paper(self, raw_paper: ArxivResult) -> Paper:
+        title = raw_paper.title
+        authors = [a.name for a in raw_paper.authors]
+        abstract = raw_paper.summary
+        pdf_url = raw_paper.pdf_url
         return Paper(
             source=self.name,
             title=title,
@@ -271,17 +289,16 @@ class ArxivRetriever(BaseRetriever):
             abstract=abstract,
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
-            full_text=full_text,
+            full_text=None,
         )
 
 
 def extract_text_from_html(paper: ArxivResult) -> str | None:
     html_url = paper.entry_id.replace("/abs/", "/html/")
-    try:
-        return _extract_text_from_html_worker(html_url)
-    except Exception as exc:
-        logger.warning(f"HTML extraction failed for {paper.title}: {exc}")
-        return None
+    return _run_with_hard_timeout(
+        _extract_text_from_html_worker, (html_url,), timeout=90,
+        operation="HTML extraction", paper_title=paper.title,
+    )
 
 
 def extract_text_from_pdf(paper: ArxivResult) -> str | None:

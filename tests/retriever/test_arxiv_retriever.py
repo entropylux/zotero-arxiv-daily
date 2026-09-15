@@ -144,6 +144,21 @@ def test_empty_feed(config, serve_feed):
     assert ArxivRetriever(config)._retrieve_raw_papers() == []
 
 
+def test_metadata_does_not_download_fulltext(config, serve_feed, monkeypatch):
+    serve_feed(atom_feed(atom_entry()))
+    calls = []
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: calls.append(paper.entry_id) or "full text")
+    retriever = ArxivRetriever(config)
+    papers = retriever.retrieve_metadata()
+    assert calls == []
+    assert papers[0].full_text is None
+    papers[0].score = 7.0
+    retriever.enrich_paper(papers[0])
+    assert calls == [papers[0].url]
+    assert papers[0].full_text == "full text"
+    assert papers[0].score == 7.0
+
+
 @pytest.mark.parametrize("content, error", [
     ("<html>upstream error</html>", "non-feed"),
     (atom_feed()[:-7], "Malformed"),
