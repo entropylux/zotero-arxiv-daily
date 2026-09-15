@@ -12,6 +12,10 @@
 需确认所选接口接受该 Key 且有可用额度。代理未运行时，请清空 `ARXIV_DAILY_PROXY` 或启动代理。
 `.env.local`、依赖、缓存和运行记录均已加入 Git 忽略规则。
 
+本机已验证的智谱组合：`OPENAI_API_BASE=https://open.bigmodel.cn/api/coding/paas/v4`、
+`LLM_MODEL=glm-5.3-flash`、`LLM_API_MODE=chat_completion`。
+这是 Coding Plan 路由；普通 API 路由 `/api/paas/v4` 使用不同的额度体系。
+
 ## 命令（PowerShell，在项目目录执行）
 
 ```powershell
@@ -84,6 +88,8 @@ Get-ScheduledTaskInfo -TaskName 'Zotero arXiv Daily - Local'
 新机器上运行 `scripts/register_local_task.ps1` 可创建禁用任务；
 添加 `-Enable` 会先做配置检查，然后创建启用任务。已有同名任务时脚本拒绝覆盖。
 
-迁移顺序：填写凭据 → 离线检查 → 本地实际运行验证 → 启用本地定时任务 →
-移除 GitHub `.github/workflows/main.yml` 的 `schedule`（保留手动触发）。
-本地未验证通过之前，保留 GitHub 日程以避免中断推送。
+本机迁移已完成（2026-09-15）：任务已启用，最近退出码为 0，下一次为 2026-09-16 09:00。
+当天实际邮件成功记录见 `.local-state/status.json`；优化后的预览记录独立保存，不能当作发送凭证。
+GitHub `.github/workflows/main.yml` 已移除 `schedule`，保留手动触发。
+`keep-alive.yml` 仍有仓库保活日程，不负责发送邮件。
+新机器仍需完成凭据填写、检查和实际运行验证，再启用本地任务。

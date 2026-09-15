@@ -1,5 +1,9 @@
 ## 🐳 Docker Deployment
 
+> Legacy upstream reference, not the active deployment of this fork. The current checkout
+> does not include a Dockerfile, so the build command below requires upstream container files.
+> Use [Windows local deployment](../LOCAL_WINDOWS.md) for the maintained setup.
+
 For users who prefer containerized deployment, we now provide Docker deployment options. This is particularly useful for:
 
 - Running the service on your own server instead of GitHub Actions

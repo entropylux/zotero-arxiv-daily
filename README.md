@@ -25,14 +25,21 @@
 > [!IMPORTANT]
 > Please keep an eye on this repo, and merge your forked repo in time when there is any update of this upstream, in order to enjoy new features and fix found bugs.
 
+## 本 fork 的运行入口
+
+本版本在 Windows 本地每天 09:00 运行，按 Zotero 相关性最多推送 20 篇。
+安装、Coding Plan 接口、并发/GPU 配置和实测结果见 [Windows 运行手册](LOCAL_WINDOWS.md)。
+arXiv 直接复用 Atom 元数据，先排序选取前 20，再提取全文和生成摘要。
+GitHub 邮件工作流仅保留手动触发；下面的云端配置为可选参考，不会自动启用每日邮件。
+
 ## 🧐 About <a name = "about"></a>
 
 > Track new scientific researches of your interest by just forking (and staring) this repo!😊
 
-*Zotero-arXiv-Daily* finds arxiv papers that may attract you based on the context of your Zotero library, and then sends the result to your mailbox📮. It can be deployed as Github Action Workflow with **zero cost**, **no installation**, and **few configuration** of Github Action environment variables for daily **automatic** delivery.
+*Zotero-arXiv-Daily* finds arxiv papers that may attract you based on the context of your Zotero library, and then sends the result to your mailbox📮. This fork runs locally on Windows; manual GitHub Actions execution remains available. Model API fees and service quotas depend on your provider.
 
 ## ✨ Features
-- Totally free! All the calculation can be done in the Github Action runner locally within its quota (for public repo).
+- Local embedding computation, with optional CUDA acceleration; online model calls use your provider's quota.
 - AI-generated TL;DR for you to quickly pick up target papers.
 - Affiliations of the paper are resolved and presented.
 - Links of PDF and code implementation (if any) presented in the e-mail.
@@ -159,7 +166,7 @@ reranker:
 executor:
   debug: false # Whether to use debug mode. Example: true
   send_empty: false # Whether to send an empty email even if no new papers today. Example: true
-  max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
+  max_paper_num: 20 # Maximum papers presented in the email.
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 ```
