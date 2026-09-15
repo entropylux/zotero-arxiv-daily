@@ -10,9 +10,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          repository: ${{ vars.REPOSITORY }}
-          ref: ${{ vars.REF }}
+        # Run this repository at the triggering ref, including its local fixes.
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
