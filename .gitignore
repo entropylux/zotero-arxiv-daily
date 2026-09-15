@@ -7,6 +7,10 @@ wheels/
 .vscode/
 *.egg-info
 .env
+.env.local
+.local-deps/
+.local-state/
+.cache/
 
 # Virtual environments
 .venv

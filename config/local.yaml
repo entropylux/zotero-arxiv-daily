@@ -1,0 +1,40 @@
+defaults:
+  - base
+  - _self_
+
+zotero:
+  user_id: ${oc.env:ZOTERO_ID}
+  api_key: ${oc.env:ZOTERO_KEY}
+  include_path: ["Daily/**"]
+
+source:
+  arxiv:
+    category: [quant-ph, cond-mat.dis-nn, cond-mat.other, cond-mat.quant-gas, cond-mat.stat-mech, cond-mat.str-el, cond-mat.supr-con]
+    include_cross_list: false
+
+email:
+  sender: ${oc.env:SENDER}
+  receiver: ${oc.env:RECEIVER}
+  sender_password: ${oc.env:SENDER_PASSWORD}
+  smtp_server: ${oc.env:SMTP_SERVER,smtp.qq.com}
+  smtp_port: ${oc.decode:${oc.env:SMTP_PORT,465}}
+
+llm:
+  api:
+    key: ${oc.env:OPENAI_API_KEY}
+    base_url: ${oc.env:OPENAI_API_BASE}
+  api_mode: ${oc.env:LLM_API_MODE,chat_completion}
+  language: Chinese
+  generation_kwargs:
+    model: ${oc.env:LLM_MODEL,glm-5.3-flash}
+
+executor:
+  debug: false
+  source: [arxiv]
+  reranker: local
+  max_paper_num: 20
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
