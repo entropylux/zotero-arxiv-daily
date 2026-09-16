@@ -37,6 +37,9 @@ $pythonPath = 'C:\Users\ASUS\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 ```
 
 日志位于 `logs/local/`，最近一次执行状态位于 `.local-state/status.json`。
+定时任务通过 `scripts/run_scheduled.ps1` 启动，启动时间和退出码记录在
+`logs/local/task-launch.log`。没有当天业务日志时先检查该文件及任务的 `LastTaskResult`；
+任务退出码为 0 也可能表示当天已完成而跳过，发送结果应结合业务日志和成功日期判断。
 本地入口通过 Hydra Compose API 加载配置，避开 Hydra 命令行解析器与 Python 3.14 的兼容性问题。
 成功执行过的当天自动跳过重复运行；明确需要再次推送时添加 `--force`。
 同一时间只允许一个本地实例运行。模型下载缓存保留在 `.cache/huggingface/`。

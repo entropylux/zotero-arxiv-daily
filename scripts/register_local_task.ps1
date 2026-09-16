@@ -12,7 +12,7 @@ if ($Enable) {
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw "Task already exists: $taskName. Inspect it before replacing."
 }
-$arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -Command "& ''{0}'' ''{1}''; exit $LASTEXITCODE"' -f $pythonPath, $runnerPath
+$arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f (Join-Path $PSScriptRoot 'run_scheduled.ps1')
 $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At '09:00'
 $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
