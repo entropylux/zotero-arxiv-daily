@@ -7,6 +7,7 @@ from .protocol import CorpusPaper
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
+from .reranker.prestige import apply_prestige_bonus
 from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
@@ -140,7 +141,11 @@ class Executor:
             logger.info("Reranking papers...")
             stage_started = perf_counter()
             reranked_papers = self.reranker.rerank(all_papers, corpus)
-            reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
+            prestige = self.config.reranker.get("prestige", {})
+            prestige_enabled = float(prestige.get("bonus", 0)) > 0
+            limit = self.config.executor.max_paper_num
+            shortlist_limit = max(limit, int(prestige.get("shortlist_size", limit))) if prestige_enabled else limit
+            reranked_papers = reranked_papers[:shortlist_limit]
             self.stage_timings["ranking"] = perf_counter() - stage_started
             logger.info(f"Loading full text for only {len(reranked_papers)} selected papers ({fulltext_workers} workers)...")
             stage_started = perf_counter()
@@ -150,6 +155,9 @@ class Executor:
             stage_started = perf_counter()
             self._parallel(reranked_papers, self._summarize_paper, llm_workers, "Summaries")
             self.stage_timings["summaries"] = perf_counter() - stage_started
+            if prestige_enabled:
+                reranked_papers = apply_prestige_bonus(reranked_papers, prestige)
+            reranked_papers = reranked_papers[:limit]
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return []

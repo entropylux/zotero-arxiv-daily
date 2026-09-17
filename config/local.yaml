@@ -29,6 +29,48 @@ llm:
     model: ${oc.env:LLM_MODEL,glm-5.3-flash}
 
 reranker:
+  prestige:
+    bonus: 0.1
+    shortlist_size: 25
+    institutions:
+      - Harvard University
+      - Massachusetts Institute of Technology
+      - Stanford University
+      - California Institute of Technology
+      - University of California Berkeley
+      - University of Oxford
+      - University of Cambridge
+      - ETH Zurich
+      - ETH Zürich
+      - University of Innsbruck
+      - Delft University of Technology
+      - QuTech
+      - University of Maryland
+      - Joint Quantum Institute
+      - University of Colorado Boulder
+      - JILA
+      - Institut d'Optique
+      - Max Planck Institute of Quantum Optics
+      - University of Science and Technology of China
+      - Tsinghua University
+      - Peking University
+      - Google Quantum AI
+      - IBM Quantum
+      - QuEra
+      - Atom Computing
+      - Pasqal
+    authors:
+      - Mikhail D. Lukin
+      - Mikhail Lukin
+      - Antoine Browaeys
+      - Adam M. Kaufman
+      - Manuel Endres
+      - Jeff D. Thompson
+      - Jeff Thompson
+      - John Preskill
+      - Barbara M. Terhal
+      - Barbara Terhal
+      - Daniel Gottesman
   interests:
     weight: 0.35
     topics:

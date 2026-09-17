@@ -34,6 +34,11 @@ llm:
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  prestige:
+    bonus: 0.0
+    shortlist_size: 25
+    institutions: []
+    authors: []
   interests:
     weight: 0.0 # Blend with Zotero score; zero preserves corpus-only ranking.
     topics: [] # Maximum topic similarity is used, so either interest can match.
