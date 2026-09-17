@@ -28,6 +28,13 @@ llm:
   generation_kwargs:
     model: ${oc.env:LLM_MODEL,glm-5.3-flash}
 
+reranker:
+  interests:
+    weight: 0.35
+    topics:
+      - "Neutral-atom quantum computing with Rydberg atom arrays and optical tweezers: quantum processors, entangling gates, scalable architectures, logical qubits and fault-tolerant computation."
+      - "Quantum error correction codes: quantum LDPC codes, surface codes, stabilizer codes, bosonic codes, decoding, fault-tolerant logical gates, thresholds and logical quantum memories."
+
 executor:
   fulltext_workers: 3
   llm_workers: 4

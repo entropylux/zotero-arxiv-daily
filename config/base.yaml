@@ -34,6 +34,9 @@ llm:
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  interests:
+    weight: 0.0 # Blend with Zotero score; zero preserves corpus-only ranking.
+    topics: [] # Maximum topic similarity is used, so either interest can match.
   local:
     device: auto # Prefer CUDA when the installed PyTorch build supports it.
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano

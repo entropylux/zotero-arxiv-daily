@@ -46,6 +46,12 @@ $pythonPath = 'C:\Users\ASUS\AppData\Local\Python\pythoncore-3.14-64\python.exe'
 
 ## 性能配置
 
+本机排序额外关注中性原子量子计算和量子纠错码。`config/local.yaml` 中
+`reranker.interests.weight: 0.35` 表示总分由 65% Zotero 相似度和 35% 兴趣相似度组成；
+兴趣分取两个主题的最大相似度，任一方向匹配即可。主题描述与文献摘要一起进行向量计算，
+不新增 LLM 调用。设为 0 可恢复仅按 Zotero 排序。这是相关性加权，不是固定篇数配额，
+也不保证入选；每日仍从现有分类的候选中选最多 20 篇。
+
 arXiv 流程为：全部 Atom 元数据 → 摘要相关性排序 → 选取前 20 → 提取全文 → 生成摘要。
 排序输入仍是全部候选摘要；不再下载未入选论文的全文。
 本地 `executor.fulltext_workers: 3`、`executor.llm_workers: 4` 分别控制全文和模型请求的并发数。
