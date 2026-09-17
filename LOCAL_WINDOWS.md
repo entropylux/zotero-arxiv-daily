@@ -75,6 +75,11 @@ Ryzen 9 9950X3D / RTX 5080 16GB，183 篇候选，85 篇 Zotero 参考文献，�
 
 ## 定时任务
 
+当前调度（2026-09-17）：Codex 桌面端自动化“每日 arXiv 前20篇推送”（`arxiv-20`），
+每天北京时间 09:00 在本机运行入口并核对发送结果。需要本机及 Codex 可运行、网络和代理可用；
+这不是关机后仍能运行的云端任务。Windows 任务已停用，避免重复调度。
+下述 Windows 注册方式仅作为备用，不要与 Codex 自动化同时启用。
+
 任务名称：`Zotero arXiv Daily - Local`。每天 09:00（Windows 系统时区）。
 默认创建为禁用状态。配置和实际运行验证通过后：
 
@@ -91,7 +96,7 @@ Get-ScheduledTaskInfo -TaskName 'Zotero arXiv Daily - Local'
 新机器上运行 `scripts/register_local_task.ps1` 可创建禁用任务；
 添加 `-Enable` 会先做配置检查，然后创建启用任务。已有同名任务时脚本拒绝覆盖。
 
-本机迁移已完成（2026-09-15）：任务已启用，最近退出码为 0，下一次为 2026-09-16 09:00。
+Windows 调度已于 2026-09-17 停用，由上面的 Codex 自动化接管。
 当天实际邮件成功记录见 `.local-state/status.json`；优化后的预览记录独立保存，不能当作发送凭证。
 GitHub `.github/workflows/main.yml` 已移除 `schedule`，保留手动触发。
 `keep-alive.yml` 仍有仓库保活日程，不负责发送邮件。
