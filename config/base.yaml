@@ -34,6 +34,8 @@ llm:
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  group_priority:
+    author_aliases: []
   prestige:
     bonus: 0.0
     shortlist_size: 25

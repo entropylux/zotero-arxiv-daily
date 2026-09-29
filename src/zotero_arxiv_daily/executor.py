@@ -7,7 +7,7 @@ from .protocol import CorpusPaper
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
-from .reranker.prestige import apply_prestige_bonus
+from .reranker.prestige import apply_prestige_bonus, prioritize_group_members
 from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
@@ -141,6 +141,8 @@ class Executor:
             logger.info("Reranking papers...")
             stage_started = perf_counter()
             reranked_papers = self.reranker.rerank(all_papers, corpus)
+            group_settings = self.config.reranker.get("group_priority", {})
+            reranked_papers = prioritize_group_members(reranked_papers, group_settings)
             prestige = self.config.reranker.get("prestige", {})
             prestige_enabled = float(prestige.get("bonus", 0)) > 0
             limit = self.config.executor.max_paper_num

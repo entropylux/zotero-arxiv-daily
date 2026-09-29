@@ -10,6 +10,16 @@ def normalize(value):
     return " ".join(re.findall(r"\w+", value))
 
 
+def prioritize_group_members(papers, settings):
+    aliases = {normalize(x) for x in settings.get("author_aliases", []) if normalize(x)}
+    if not aliases:
+        return papers
+    for paper in papers:
+        normalized_authors = {normalize(name) for name in paper.authors}
+        paper.group_member_match = bool(normalized_authors & aliases)
+    return sorted(papers, key=lambda paper: (not paper.group_member_match, -paper.score))
+
+
 def apply_prestige_bonus(papers, settings):
     bonus = float(settings.get("bonus", 0))
     if not math.isfinite(bonus) or not 0 <= bonus <= 0.1:
