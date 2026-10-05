@@ -142,57 +142,28 @@ def test_port_465_connects_with_ssl_immediately(config, monkeypatch):
     assert len(sent) == 1
 
 
-def test_send_email_falls_back_to_ssl(config, monkeypatch):
-    sent = []
-    call_count = {"smtp": 0}
-
-    StubOK = make_stub_smtp(sent)
-
-    class StubSMTP_TLS_Fails:
-        def __init__(self, *a, **kw):
-            call_count["smtp"] += 1
-        def starttls(self):
-            raise OSError("TLS not supported")
-
-    class StubSMTP_SSL(StubOK):
-        pass
-
-    monkeypatch.setattr(smtplib, "SMTP", StubSMTP_TLS_Fails)
-    monkeypatch.setattr(smtplib, "SMTP_SSL", StubSMTP_SSL)
-    send_email(config, "<html>ssl</html>")
-    assert len(sent) == 1
-
-
-def test_send_email_falls_back_to_plain(config, monkeypatch):
-    sent = []
-    call_count = {"smtp": 0}
-
-    StubOK = make_stub_smtp(sent)
-
-    class StubSMTP_TLS_Fails:
-        def __init__(self, *a, **kw):
-            call_count["smtp"] += 1
-            if call_count["smtp"] == 1:
-                pass  # first SMTP() call succeeds, but starttls will fail
-            else:
-                pass  # third SMTP() call is the plain fallback
-        def starttls(self):
-            raise OSError("TLS not supported")
-        def login(self, u, p):
-            pass
-        def sendmail(self, s, r, m):
-            sent.append((s, r, m))
-        def quit(self):
-            pass
-
-    class StubSMTP_SSL_Fails:
-        def __init__(self, *a, **kw):
-            raise OSError("SSL not supported")
-
-    monkeypatch.setattr(smtplib, "SMTP", StubSMTP_TLS_Fails)
-    monkeypatch.setattr(smtplib, "SMTP_SSL", StubSMTP_SSL_Fails)
-    send_email(config, "<html>plain</html>")
-    assert len(sent) == 1
+@pytest.mark.parametrize("failure", [OSError("TLS unavailable"), __import__("ssl").SSLCertVerificationError("bad certificate")])
+def test_send_email_tls_failure_never_authenticates(config, monkeypatch, failure):
+    calls = []
+    class SMTP:
+        def __init__(self, *args, **kwargs):
+            calls.append("connect")
+            assert kwargs["timeout"] == 30
+        def starttls(self, *, context):
+            assert context.check_hostname
+            assert context.verify_mode == __import__("ssl").CERT_REQUIRED
+            raise failure
+        def login(self, *args):
+            pytest.fail("Credentials sent after TLS failure")
+        def sendmail(self, *args):
+            pytest.fail("Mail sent after TLS failure")
+        def close(self):
+            calls.append("close")
+    monkeypatch.setattr(smtplib, "SMTP", SMTP)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", lambda *a, **kw: pytest.fail("Unexpected fallback"))
+    with pytest.raises(type(failure)):
+        send_email(config, "test")
+    assert calls == ["connect", "close"]
 
 
 # ---------------------------------------------------------------------------

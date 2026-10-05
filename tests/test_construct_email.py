@@ -64,12 +64,12 @@ def test_get_stars_mid_score():
 
 
 def test_get_block_html_contains_all_fields():
-    html = get_block_html("Title", "Auth", "3.5", "Summary", "http://pdf.url", "MIT")
+    html = get_block_html("Title", "Auth", "3.5", "Summary", "https://arxiv.org/pdf/2401.00001", "MIT")
     assert "Title" in html
     assert "Auth" in html
     assert "3.5" in html
     assert "Summary" in html
-    assert "http://pdf.url" in html
+    assert "https://arxiv.org/pdf/2401.00001" in html
     assert "MIT" in html
 
 

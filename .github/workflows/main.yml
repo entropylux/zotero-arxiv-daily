@@ -3,16 +3,21 @@ on:
   workflow_dispatch:
   # Daily delivery is scheduled locally on Windows at 09:00 Asia/Shanghai.
 
+permissions:
+  contents: read
+
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
         # Run this repository at the triggering ref, including its local fixes.
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Run script
         env:
