@@ -25,10 +25,10 @@ def test_missing_affiliation_and_substring_do_not_match():
     assert [p.score for p in papers] == [5, 5]
 
 
-def test_unicode_and_punctuation_in_affiliation():
+def test_model_only_affiliation_cannot_change_score():
     p = paper(5, ["ETH Zürich, Switzerland"])
     apply_prestige_bonus([p], {"bonus": 0.1, "institutions": ["ETH Zurich"]})
-    assert p.score == pytest.approx(5.1)
+    assert p.score == 5
 
 
 @pytest.mark.parametrize("bonus", [-1, 0.2, float("nan")])

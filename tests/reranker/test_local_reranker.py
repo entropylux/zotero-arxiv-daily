@@ -24,6 +24,9 @@ def test_device_selection_and_single_embedding_batch(config, monkeypatch, has_cu
     class Encoder:
         def __init__(self, model, **kwargs):
             assert kwargs["device"] == expected
+            assert kwargs["trust_remote_code"] is False
+            assert kwargs["revision"] == config.reranker.local.revision
+            assert kwargs["model_kwargs"]["use_safetensors"] is True
         def encode(self, texts, **kwargs):
             calls.append(texts)
             return np.eye(len(texts), dtype=np.float32)
@@ -36,3 +39,13 @@ def test_device_selection_and_single_embedding_batch(config, monkeypatch, has_cu
     score = LocalReranker(config).get_similarity_score(["one", "two"], ["reference"])
     assert calls == [["one", "two", "reference"]]
     assert score.shape == (2, 1)
+
+
+@pytest.mark.parametrize("revision", ["main", "v1", "", None])
+def test_mutable_revision_rejected_before_model_load(config, monkeypatch, revision):
+    monkeypatch.setitem(sys.modules, "sentence_transformers", SimpleNamespace(
+        SentenceTransformer=lambda *a, **k: pytest.fail("Must reject mutable revision first")))
+    config.executor.debug = True
+    config.reranker.local.revision = revision
+    with pytest.raises(ValueError, match="immutable"):
+        LocalReranker(config).get_similarity_score(["paper"], ["corpus"])

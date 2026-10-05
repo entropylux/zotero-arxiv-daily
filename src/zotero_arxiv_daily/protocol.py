@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, TypeVar
 from datetime import datetime
-import re
 import tiktoken
 from openai import OpenAI
 from loguru import logger
@@ -115,10 +114,13 @@ class Paper:
                 ],
             )
 
-            affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
+            if not isinstance(affiliations, str) or len(affiliations) > 8192:
+                raise ValueError("Invalid affiliation response size")
             affiliations = json.loads(affiliations)
-            affiliations = list(set(affiliations))
-            affiliations = [str(a) for a in affiliations]
+            if (not isinstance(affiliations, list) or len(affiliations) > 32
+                    or any(not isinstance(a, str) or len(a) > 256 for a in affiliations)):
+                raise ValueError("Expected a bounded JSON list of affiliation strings")
+            affiliations = list(dict.fromkeys(a.strip() for a in affiliations if a.strip()))
 
             return affiliations
     

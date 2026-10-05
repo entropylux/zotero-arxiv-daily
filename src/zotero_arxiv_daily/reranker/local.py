@@ -1,5 +1,6 @@
 from .base import BaseReranker, register_reranker
 import logging
+import re
 import warnings
 import numpy as np
 from loguru import logger
@@ -24,7 +25,14 @@ class LocalReranker(BaseReranker):
         requested_device = self.config.reranker.local.get("device", "auto")
         device = ("cuda" if torch.cuda.is_available() else "cpu") if requested_device == "auto" else requested_device
         logger.info(f"Embedding device: {device}; torch={torch.__version__}; CUDA={torch.version.cuda}")
-        encoder = SentenceTransformer(self.config.reranker.local.model, trust_remote_code=True, device=device)
+        revision = self.config.reranker.local.get("revision", "")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError("reranker.local.revision must be a full immutable model commit SHA")
+        encoder = SentenceTransformer(
+            self.config.reranker.local.model, revision=revision,
+            trust_remote_code=False, device=device,
+            model_kwargs={"use_safetensors": True},
+        )
         if self.config.reranker.local.encode_kwargs:
             encode_kwargs = dict(self.config.reranker.local.encode_kwargs)
         else:

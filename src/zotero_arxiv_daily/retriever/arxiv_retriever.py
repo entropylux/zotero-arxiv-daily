@@ -10,6 +10,8 @@ from queue import Empty
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+import time
+from .. import resource_limits as limits
 
 T = TypeVar("T")
 
@@ -19,88 +21,104 @@ TAR_EXTRACT_TIMEOUT = 180
 
 
 def _download_file(url: str, path: str) -> None:
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
-        response.raise_for_status()
-        with open(path, "wb") as file:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    file.write(chunk)
-
-
-def _run_in_subprocess(
-    result_queue: Any,
-    func: Callable[..., T | None],
-    args: tuple[Any, ...],
-) -> None:
+    started = time.monotonic()
     try:
-        result_queue.put(("ok", func(*args)))
+        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+            response.raise_for_status()
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) > limits.MAX_DOWNLOAD_BYTES:
+                raise limits.ResourceLimitError("Download Content-Length exceeds quota")
+            size = 0
+            with open(path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if time.monotonic() - started > 60:
+                        raise limits.ResourceLimitError("Download deadline exceeded")
+                    size += len(chunk)
+                    if size > limits.MAX_DOWNLOAD_BYTES:
+                        raise limits.ResourceLimitError("Download byte quota exceeded")
+                    file.write(chunk)
+    except BaseException:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
+
+
+def _run_in_subprocess(result_queue, func, args, temp_dir):
+    try:
+        memory_guard = limits.limit_worker_memory()
+        result = func(*args, temp_dir=temp_dir) if temp_dir is not None else func(*args)
+        result_queue.put(("ok", limits.bounded_text(result)))
     except Exception as exc:
-        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        result_queue.put(("error", f"{type(exc).__name__}: {str(exc)[:1000]}"))
 
 
 def _run_with_hard_timeout(
-    func: Callable[..., T | None],
-    args: tuple[Any, ...],
-    *,
-    timeout: float,
-    operation: str,
-    paper_title: str,
+    func: Callable[..., T | None], args: tuple[Any, ...], *, timeout: float,
+    operation: str, paper_title: str, temporary_files: bool = False,
 ) -> T | None:
-    # Forking a threaded parent (especially after CUDA initialization) is unsafe.
-    context = multiprocessing.get_context("spawn")
-    result_queue = context.Queue()
-    process = context.Process(target=_run_in_subprocess, args=(result_queue, func, args))
-    process.start()
+    # The parent owns the directory so kill/timeout cannot strand downloaded files.
+    with TemporaryDirectory(prefix="arxiv-fulltext-") as temp_dir:
+        context = multiprocessing.get_context("spawn")
+        result_queue = context.Queue(maxsize=1)
+        process = context.Process(target=_run_in_subprocess, args=(
+            result_queue, func, args, temp_dir if temporary_files else None))
+        process.start()
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(f"{operation} timed out for {paper_title} after {timeout} seconds")
+                    return None
+                try:
+                    status, payload = result_queue.get(timeout=min(0.1, remaining))
+                    break
+                except Empty:
+                    if not process.is_alive():
+                        logger.warning(f"{operation} worker exited for {paper_title}")
+                        return None
+            if status == "ok":
+                return limits.bounded_text(payload)
+            logger.warning(f"{operation} failed for {paper_title}: {payload}")
+            return None
+        finally:
+            process.join(0.2)
+            if process.is_alive():
+                process.kill()
+            process.join()
+            process.close()
+            result_queue.close()
+            result_queue.join_thread()
 
-    try:
-        status, payload = result_queue.get(timeout=timeout)
-    except Empty:
-        if process.is_alive():
-            process.kill()
-        process.join(5)
-        result_queue.close()
-        result_queue.join_thread()
-        logger.warning(f"{operation} timed out for {paper_title} after {timeout} seconds")
-        return None
 
-    process.join(5)
-    result_queue.close()
-    result_queue.join_thread()
-
-    if status == "ok":
-        return payload
-
-    logger.warning(f"{operation} failed for {paper_title}: {payload}")
-    return None
+def _extract_text_from_pdf_worker(pdf_url: str, *, temp_dir: str) -> str:
+    path = os.path.join(temp_dir, "paper.pdf")
+    _download_file(pdf_url, path)
+    return limits.bounded_text(extract_markdown_from_pdf(path))
 
 
-def _extract_text_from_pdf_worker(pdf_url: str) -> str:
-    with TemporaryDirectory() as temp_dir:
-        path = os.path.join(temp_dir, "paper.pdf")
-        _download_file(pdf_url, path)
-        return extract_markdown_from_pdf(path)
-
-
-def _extract_text_from_html_worker(html_url: str) -> str | None:
+def _extract_text_from_html_worker(html_url: str, *, temp_dir: str) -> str | None:
     import trafilatura
-
-    downloaded = trafilatura.fetch_url(html_url)
-    if downloaded is None:
-        raise ValueError(f"Failed to download HTML from {html_url}")
+    path = os.path.join(temp_dir, "paper.html")
+    _download_file(html_url, path)
+    with open(path, "rb") as file:
+        downloaded = file.read(limits.MAX_DOWNLOAD_BYTES + 1)
+    if len(downloaded) > limits.MAX_DOWNLOAD_BYTES:
+        raise limits.ResourceLimitError("HTML input quota exceeded")
     text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
     if not text:
-        raise ValueError(f"No text extracted from {html_url}")
-    return text
+        raise ValueError("No text extracted from HTML")
+    return limits.bounded_text(text)
 
 
-def _extract_text_from_tar_worker(source_url: str, paper_id: str, paper_title: str | None = None) -> str | None:
-    with TemporaryDirectory() as temp_dir:
-        path = os.path.join(temp_dir, "paper.tar.gz")
-        _download_file(source_url, path)
-        file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
-        if not file_contents or "all" not in file_contents:
-            raise ValueError("Main tex file not found.")
-        return file_contents["all"]
+def _extract_text_from_tar_worker(source_url: str, paper_id: str,
+                                  paper_title: str | None = None, *, temp_dir: str) -> str | None:
+    path = os.path.join(temp_dir, "paper.tar.gz")
+    _download_file(source_url, path)
+    file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
+    if not file_contents or "all" not in file_contents:
+        raise ValueError("Main tex file not found.")
+    return limits.bounded_text(file_contents["all"])
 
 
 @register_retriever("arxiv")
@@ -297,7 +315,7 @@ def extract_text_from_html(paper: ArxivResult) -> str | None:
     html_url = paper.entry_id.replace("/abs/", "/html/")
     return _run_with_hard_timeout(
         _extract_text_from_html_worker, (html_url,), timeout=90,
-        operation="HTML extraction", paper_title=paper.title,
+        operation="HTML extraction", paper_title=paper.title, temporary_files=True,
     )
 
 
@@ -309,7 +327,7 @@ def extract_text_from_pdf(paper: ArxivResult) -> str | None:
         _extract_text_from_pdf_worker,
         (paper.pdf_url,),
         timeout=PDF_EXTRACT_TIMEOUT,
-        operation="PDF extraction",
+        operation="PDF extraction", temporary_files=True,
         paper_title=paper.title,
     )
 
@@ -323,6 +341,6 @@ def extract_text_from_tar(paper: ArxivResult) -> str | None:
         _extract_text_from_tar_worker,
         (source_url, paper.entry_id, paper.title),
         timeout=TAR_EXTRACT_TIMEOUT,
-        operation="Tar extraction",
+        operation="Tar extraction", temporary_files=True,
         paper_title=paper.title,
     )

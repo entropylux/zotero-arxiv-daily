@@ -1,11 +1,36 @@
 from .protocol import Paper
 import math
+from html import escape
+from urllib.parse import quote, urlsplit, urlunsplit
+
+
+_PDF_HOSTS = {"arxiv.org", "www.arxiv.org", "biorxiv.org", "www.biorxiv.org",
+              "medrxiv.org", "www.medrxiv.org", "chemrxiv.org"}
+
+
+def _safe_pdf_url(value):
+    try:
+        url = urlsplit(str(value or ""))
+        if (url.scheme != "https" or url.hostname not in _PDF_HOSTS
+                or url.username is not None or url.password is not None
+                or url.port not in {None, 443}):
+            return "#"
+        safe = urlunsplit(("https", url.hostname, quote(url.path, safe="/%:@-._~"),
+                           quote(url.query, safe="=&%:@/?-._~"), ""))
+        return escape(safe, quote=True)
+    except ValueError:
+        return "#"
+
+
+def _text(value):
+    return escape(str(value) if value is not None else "", quote=True)
 
 
 framework = """
 <!DOCTYPE HTML>
 <html>
 <head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
   <style>
     .star-wrapper {
       font-size: 1.3em; /* 调整星星大小 */
@@ -85,7 +110,9 @@ def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affi
     </tr>
 </table>
 """
-    return block_template.format(title=title, authors=authors,rate=rate, tldr=tldr, pdf_url=pdf_url, affiliations=affiliations)
+    return block_template.format(title=_text(title), authors=_text(authors), rate=_text(rate),
+                                 tldr=_text(tldr), pdf_url=_safe_pdf_url(pdf_url),
+                                 affiliations=_text(affiliations))
 
 def get_stars(score:float):
     full_star = '<span class="full-star">⭐</span>'
