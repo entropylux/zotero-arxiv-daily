@@ -16,10 +16,10 @@ source:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
+  tls_mode: auto
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
   receiver: ??? # The email account that receives the paper list. Example: abc@outlook.com
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
-  tls_mode: auto # 465: verified implicit TLS; other ports: mandatory STARTTLS.
   smtp_port: ??? # The port of SMTP server. Example: 465
   sender_password: ??? # The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this. Example: abcdefghijklmn
 
@@ -30,25 +30,15 @@ llm:
   api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
   generation_kwargs:
   # Arguments for the selected LLM API.
-    max_tokens: 16384
+    max_tokens: 1024
     model: ???
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
-  group_priority:
-    author_aliases: []
-  prestige:
-    bonus: 0.0
-    shortlist_size: 25
-    institutions: []
-    authors: []
-  interests:
-    weight: 0.0 # Blend with Zotero score; zero preserves corpus-only ranking.
-    topics: [] # Maximum topic similarity is used, so either interest can match.
   local:
-    device: auto # Prefer CUDA when the installed PyTorch build supports it.
+    device: auto
+    revision: ac5d898c8d382b17167c33e5c8af644a3519b47d
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
-    revision: ac5d898c8d382b17167c33e5c8af644a3519b47d # jina v5 nano retrieval; native EuroBERT only
     encode_kwargs:
     # The kwargs for the encode method of the local embedding model. Details see [here](https://www.sbert.net/docs/package_reference/SentenceTransformer.html#sentence_transformers.SentenceTransformer.encode)
       task: retrieval
@@ -60,10 +50,10 @@ reranker:
     batch_size: null # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
 
 executor:
-  fulltext_workers: 1 # Bounded parallelism for selected papers only.
-  llm_workers: 1 # Maximum simultaneous paper-summary tasks.
+  llm_workers: 2 # Summarize only selected abstracts, with bounded concurrency.
+  state_dir: null # Local launcher sets this for delivery history.
   debug: false # Whether to use debug mode. Example: true
   send_empty: false # Whether to send an empty email even if no new papers today. Example: true
-  max_paper_num: 20 # Keep the highest-ranked papers by relevance to your Zotero library.
+  max_paper_num: 20 # Small daily digest, ranked only by the Zotero library.
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'

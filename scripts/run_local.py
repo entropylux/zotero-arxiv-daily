@@ -35,6 +35,7 @@ def prepare():
     from omegaconf import OmegaConf
     with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
         config = compose(config_name="local")
+        config.executor.state_dir = str(ROOT / '.local-state')
         OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
     from zotero_arxiv_daily.executor import Executor  # Verify runtime imports too.
     return config
@@ -47,7 +48,7 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Run the full pipeline without sending email")
     args = parser.parse_args()
     try:
-        prepare()
+        config = prepare()
     except Exception as exc:
         # Report missing variable names, never resolved config or credential values.
         if isinstance(exc, ValueError) and str(exc).startswith("Fill .env.local"):
@@ -56,7 +57,7 @@ def main():
             print(f"Local preflight failed ({type(exc).__name__}); check dependencies and .env.local.", file=sys.stderr)
         return 2
     if args.check:
-        print("Local config and imports OK; max 20 papers. No network calls or email sent.")
+        print("Local config and imports OK. No network calls or email sent.")
         return 0
 
     from filelock import FileLock, Timeout

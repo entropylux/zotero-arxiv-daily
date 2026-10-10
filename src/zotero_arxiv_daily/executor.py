@@ -7,13 +7,14 @@ from .protocol import CorpusPaper
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
-from .reranker.prestige import apply_prestige_bonus, prioritize_group_members
 from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
-from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+import math
 from time import perf_counter
+from .delivery import DeliveryState
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -42,6 +43,7 @@ class Executor:
         }
         self.reranker = get_reranker_cls(config.executor.reranker)(config)
         self.openai_client = OpenAI(api_key=config.llm.api.key, base_url=config.llm.api.base_url)
+        self.delivery = DeliveryState(config.executor.get('state_dir'))
     def fetch_zotero_corpus(self) -> list[CorpusPaper]:
         logger.info("Fetching zotero corpus")
         zot = zotero.Zotero(self.config.zotero.user_id, 'user', self.config.zotero.api_key)
@@ -93,39 +95,22 @@ class Executor:
         return corpus
 
     
-    def _enrich_paper(self, paper):
-        try:
-            self.retrievers[paper.source].enrich_paper(paper)
-        except Exception as exc:
-            logger.warning(f"Full text unavailable for {paper.title}; using abstract: {exc}")
-
-    def _summarize_paper(self, paper):
-        paper.generate_tldr(self.openai_client, self.config.llm)
-        paper.generate_affiliations(self.openai_client, self.config.llm)
-
-    @staticmethod
-    def _parallel(papers, operation, workers, description):
-        if workers < 1:
-            raise ValueError("Worker counts must be positive")
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            # Workers mutate distinct papers; the ranked list stays in its original order.
-            list(tqdm(pool.map(operation, papers), total=len(papers), desc=description))
-
     def run(self, *, dry_run=False):
         started = perf_counter()
         self.stage_timings = {}
-        fulltext_workers = int(self.config.executor.get("fulltext_workers", 1))
-        llm_workers = int(self.config.executor.get("llm_workers", 1))
-        if min(fulltext_workers, llm_workers) < 1:
-            raise ValueError("Worker counts must be positive")
+        limit = self.config.executor.max_paper_num
+        workers = self.config.executor.get('llm_workers', 2)
+        if type(limit) is not int or limit < 1 or type(workers) is not int or not 1 <= workers <= 4:
+            raise ValueError('Paper limit must be positive and llm_workers must be between 1 and 4')
+        if not dry_run:
+            self.delivery.check_pending()
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
-        self.stage_timings["zotero"] = perf_counter() - started
         if len(corpus) == 0:
-            logger.error(f"No zotero papers found. Please check your zotero settings:\n{self.config.zotero}")
-            return
+            raise ValueError('No Zotero papers with usable abstracts; check collection selection')
+        self.stage_timings['zotero'] = perf_counter() - started
+        stage = perf_counter()
         all_papers = []
-        stage_started = perf_counter()
         for source, retriever in self.retrievers.items():
             logger.info(f"Retrieving {source} papers...")
             papers = retriever.retrieve_metadata()
@@ -135,44 +120,36 @@ class Executor:
             logger.info(f"Retrieved {len(papers)} {source} papers")
             all_papers.extend(papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
-        self.stage_timings["metadata"] = perf_counter() - stage_started
+        self.stage_timings['metadata'] = perf_counter() - stage
+        candidates = self.delivery.unseen(all_papers)
         reranked_papers = []
-        if len(all_papers) > 0:
+        if candidates:
             logger.info("Reranking papers...")
-            stage_started = perf_counter()
-            reranked_papers = self.reranker.rerank(all_papers, corpus)
-            group_settings = self.config.reranker.get("group_priority", {})
-            reranked_papers = prioritize_group_members(reranked_papers, group_settings)
-            prestige = self.config.reranker.get("prestige", {})
-            prestige_enabled = float(prestige.get("bonus", 0)) > 0
-            limit = self.config.executor.max_paper_num
-            shortlist_limit = max(limit, int(prestige.get("shortlist_size", limit))) if prestige_enabled else limit
-            reranked_papers = reranked_papers[:shortlist_limit]
-            self.stage_timings["ranking"] = perf_counter() - stage_started
-            logger.info(f"Loading full text for only {len(reranked_papers)} selected papers ({fulltext_workers} workers)...")
-            stage_started = perf_counter()
-            self._parallel(reranked_papers, self._enrich_paper, fulltext_workers, "Selected full texts")
-            self.stage_timings["fulltext"] = perf_counter() - stage_started
-            logger.info("Generating TLDR and affiliations...")
-            stage_started = perf_counter()
-            self._parallel(reranked_papers, self._summarize_paper, llm_workers, "Summaries")
-            self.stage_timings["summaries"] = perf_counter() - stage_started
-            if prestige_enabled:
-                reranked_papers = apply_prestige_bonus(reranked_papers, prestige)
-            reranked_papers = reranked_papers[:limit]
-        elif not self.config.executor.send_empty:
-            logger.info("No new papers found. No email will be sent.")
-            return []
-        if dry_run:
-            self.stage_timings["total"] = perf_counter() - started
-            logger.info(f"Preview complete; no email sent. Timings (seconds): {self.stage_timings}")
-            return reranked_papers
-        logger.info("Sending email...")
-        stage_started = perf_counter()
-        email_content = render_email(reranked_papers)
-        send_email(self.config, email_content)
-        logger.info("Email sent successfully")
-        self.stage_timings["email"] = perf_counter() - stage_started
-        self.stage_timings["total"] = perf_counter() - started
-        logger.info(f"Timings (seconds): {self.stage_timings}")
+            stage = perf_counter()
+            ranked = self.reranker.rerank(candidates, corpus)
+            reranked_papers = [p for p in ranked if p.score is not None and math.isfinite(p.score) and p.score > 0][:limit]
+            self.stage_timings['ranking'] = perf_counter() - stage
+            stage = perf_counter()
+            logger.info(f'Generating abstract-based TLDRs for {len(reranked_papers)} selected papers')
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(lambda p: p.generate_tldr(self.openai_client, self.config.llm), reranked_papers))
+            self.stage_timings['summaries'] = perf_counter() - stage
+        self.email_content = render_email(reranked_papers)
+        self.report = {'mode': 'zotero_only', 'metadata_count': len(all_papers),
+                       'unseen_count': len(candidates), 'corpus_count': len(corpus),
+                       'selected': [asdict(p) for p in reranked_papers],
+                       'delivery': 'preview' if dry_run else 'not_sent'}
+        if not dry_run and (reranked_papers or self.config.executor.send_empty):
+            logger.info('Sending email...')
+            stage = perf_counter()
+            self.delivery.send(reranked_papers, lambda: send_email(self.config, self.email_content))
+            self.report['delivery'] = 'sent'
+            self.stage_timings['email'] = perf_counter() - stage
+            logger.info('Email sent successfully')
+        elif not reranked_papers and not dry_run:
+            self.report['delivery'] = 'no_new_papers'
+            logger.info('No unseen relevant papers; no email sent')
+        self.stage_timings['total'] = perf_counter() - started
+        self.report['timings'] = self.stage_timings
+        logger.info(f'Zotero-only digest: {len(reranked_papers)} papers; timings: {self.stage_timings}')
         return reranked_papers

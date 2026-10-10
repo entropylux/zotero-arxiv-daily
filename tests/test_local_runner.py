@@ -17,7 +17,7 @@ spec.loader.exec_module(runner)
 @pytest.fixture
 def local_run(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "ROOT", tmp_path)
-    monkeypatch.setattr(runner, "prepare", lambda: None)
+    monkeypatch.setattr(runner, "prepare", lambda: {})
     monkeypatch.setattr(sys, "argv", ["run_local.py"])
     for key in ("ZOTERO_KEY", "SENDER_PASSWORD", "OPENAI_API_KEY"):
         monkeypatch.setenv(key, "test-secret-" + key)

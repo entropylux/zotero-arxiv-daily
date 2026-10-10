@@ -20,7 +20,6 @@ from tests.canned_responses import make_sample_paper, make_stub_smtp
 from zotero_arxiv_daily import resource_limits as limits
 from zotero_arxiv_daily.construct_email import render_email, _safe_pdf_url
 from zotero_arxiv_daily.protocol import Paper
-from zotero_arxiv_daily.reranker.prestige import apply_prestige_bonus
 from zotero_arxiv_daily.retriever import arxiv_retriever as retriever
 from zotero_arxiv_daily.utils import extract_tex_code_from_tar, send_email
 
@@ -80,15 +79,6 @@ def test_all_remote_html_fields_are_text():
     Elements().feed(document)
     assert document.count('&lt;img') == 4
     assert '&amp;lt;b&amp;gt;' in document
-
-
-def test_injected_affiliations_never_change_final_order():
-    forged = make_sample_paper(score=6.0, affiliations=['Harvard University', 'MIT'])
-    legitimate = make_sample_paper(score=6.05)
-    result = apply_prestige_bonus([legitimate, forged],
-                                  {'bonus': 0.1, 'institutions': ['Harvard University', 'MIT']})
-    assert result == [legitimate, forged]
-    assert forged.score == 6.0
 
 
 @pytest.mark.parametrize('response', ['[1]', '{"name":"MIT"}', '[[]]', '["MIT"] trailing',

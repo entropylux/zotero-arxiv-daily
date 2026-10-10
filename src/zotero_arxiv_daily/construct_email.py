@@ -58,7 +58,7 @@ framework = """
 
 <br><br>
 <div>
-To unsubscribe, remove your email in your Github Action setting.
+Zotero 文献库精选 · 相关性评分不代表论文质量
 </div>
 
 </body>
@@ -151,8 +151,9 @@ def render_email(papers:list[Paper]) -> str:
             if len(p.affiliations) > 5:
                 affiliations += ', ...'
         else:
-            affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations))
+            affiliations = ''
+        summary = ('[原文摘要回退] ' + p.abstract) if p.tldr == p.abstract else p.tldr
+        parts.append(get_block_html(p.title, authors, rate, summary, p.pdf_url, affiliations))
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
     return framework.replace('__CONTENT__', content)

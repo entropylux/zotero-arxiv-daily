@@ -70,6 +70,7 @@ def test_response_mode_maps_max_tokens(llm_params):
     client = SimpleNamespace(
         responses=SimpleNamespace(create=create_response),
     )
+    client.with_options = lambda **kwargs: client
     llm_params["api_mode"] = "response"
     paper = make_sample_paper()
 
@@ -154,3 +155,15 @@ def test_affiliations_error_returns_none(llm_params):
     result = paper.generate_affiliations(broken_client, llm_params)
     assert result is None
     assert paper.affiliations is None
+def test_nested_generation_options_are_json_serializable():
+    import json
+    from types import SimpleNamespace
+    from omegaconf import OmegaConf
+    from zotero_arxiv_daily.protocol import _request_llm
+    def create(**kwargs):
+        json.dumps(kwargs)
+        assert kwargs['extra_body'] == {'thinking': {'type': 'disabled'}}
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Summary'))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    config = OmegaConf.create({'generation_kwargs': {'extra_body': {'thinking': {'type': 'disabled'}}}})
+    assert _request_llm(client, config, []) == 'Summary'

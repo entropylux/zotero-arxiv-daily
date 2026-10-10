@@ -17,6 +17,14 @@ from . import resource_limits as limits
 
 _TOKEN_RE = re.compile(r'[a-zA-Z0-9]+')
 
+
+def _strip_tex_comments(text: str) -> str:
+    """Clean inert TeX text without losing escaped percentages or line endings."""
+    # A percent sign starts a comment only after an even number of backslashes.
+    # Keep those pairs (TeX line breaks) so later cleanup preserves separation.
+    return re.sub(r'(?<!\\)((?:\\\\)*)%[^\r\n]*', r'\1', text)
+
+
 def _tokenize(text: str) -> list[str]:
     tokens = []
     for match in _TOKEN_RE.finditer(text):
@@ -79,7 +87,7 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
                     raise limits.ResourceLimitError("Archive member quota exceeded")
                 if member.size > limits.MAX_MEMBER_BYTES or member.size < 0:
                     raise limits.ResourceLimitError("Archive member size quota exceeded")
-                if not member.isfile() or not member.name.endswith((".tex", ".bbl")):
+                if not member.isfile() or not member.name.endswith((".tex", ".bbl", ".bib")):
                     continue
                 if member.name in contents:
                     raise limits.ResourceLimitError("Duplicate archive member")
@@ -125,11 +133,11 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
     doc_block_candidates: list[str] = []
     for t in tex_files:
         content = contents[t]
-        content = re.sub(r'%.*\n', '\n', content)
+        content = _strip_tex_comments(content)
         content = re.sub(r'\\begin{comment}.*?\\end{comment}', '', content, flags=re.DOTALL)
         content = re.sub(r'\\iffalse.*?\\fi', '', content, flags=re.DOTALL)
         content = re.sub(r'\n+', '\n', content)
-        content = re.sub(r'\\\\', '', content)
+        content = re.sub(r'\\\\', ' ', content)
         content = re.sub(r'[ \t\r\f]{3,}', ' ', content)
         if main_tex is None and re.search(r'\\begin\{document\}', content) and not any(w in t for w in ['example', 'sample', 'template']):
             doc_block_candidates.append(t)
@@ -168,7 +176,13 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
         if size + len(tail) > limits.MAX_TEXT_CHARS:
             raise limits.ResourceLimitError("Expanded TeX output quota exceeded")
         main_source = ''.join(parts) + tail
-        file_contents["all"] = main_source
+        # Preserve bibliography data as inert text. Previously only its filename
+        # helped choose the main TeX file, leaving citation keys unresolved.
+        bibliography = '\n'.join(contents[name] for name in contents
+                                 if name.endswith(('.bbl', '.bib')))
+        if bibliography:
+            main_source += '\n[REFERENCE SOURCE FILES]\n' + bibliography
+        file_contents["all"] = limits.bounded_text(main_source)
     else:
         logger.debug(f"Failed to find main tex file of {paper_id}: No tex file containing the document block.")
         file_contents["all"] = None

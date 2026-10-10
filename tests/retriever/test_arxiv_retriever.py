@@ -111,6 +111,15 @@ def test_announcement_filter_and_dedup(config, serve_feed, include_cross, expect
     assert len(ArxivRetriever(config)._retrieve_raw_papers()) == expected
 
 
+def test_old_curation_config_cannot_enable_replacements(config, serve_feed):
+    from omegaconf import OmegaConf
+    OmegaConf.update(config, "curation", {"include_replacements": True}, force_add=True)
+    config.source.arxiv.include_cross_list = False
+    serve_feed(atom_feed(atom_entry() + atom_entry("2609.12346v2", "replace") + atom_entry("2609.12347", "cross")))
+    papers = ArxivRetriever(config)._retrieve_raw_papers()
+    assert {p.entry_id for p in papers} == {"https://arxiv.org/abs/2609.12345v1"}
+
+
 @pytest.mark.parametrize("pid", ["oai:arXiv.org:2609.12345v1", "https://arxiv.org/abs/2609.12345v1", "hep-th/9901001v2"])
 def test_metadata_and_download_urls(config, serve_feed, pid):
     serve_feed(atom_feed(atom_entry(pid, creator="Alice (Lab, University), Bob, Jr., Chloé")))

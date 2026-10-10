@@ -252,6 +252,25 @@ def test_extract_tex_multiple_document_blocks_no_title(make_tar):
     assert result["all"] is not None
 
 
+@pytest.mark.parametrize('suffix', ['bbl', 'bib'])
+def test_reference_files_preserved_with_tex(make_tar, suffix):
+    reference = '@article{nearest, title={Prior theorem}, eprint={2501.00001}}'
+    path = make_tar({'main.tex': r'\begin{document}Result \cite{nearest}\end{document}',
+                     f'main.{suffix}': reference})
+    result = extract_tex_code_from_tar(path, 'test')
+    assert '[REFERENCE SOURCE FILES]' in result['all']
+    assert reference in result['all']
+
+
+def test_bibliography_cannot_bypass_output_limit(make_tar, monkeypatch):
+    from zotero_arxiv_daily import resource_limits as limits
+    monkeypatch.setattr(limits, 'MAX_TEXT_CHARS', 100)
+    path = make_tar({'main.tex': r'\begin{document}Result\end{document}',
+                     'main.bib': 'bibliography' * 20})
+    with pytest.raises(limits.ResourceLimitError):
+        extract_tex_code_from_tar(path, 'test')
+
+
 class TestBm25Pick:
     def test_picks_best_match(self):
         candidates = {

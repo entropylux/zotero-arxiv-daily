@@ -7,9 +7,34 @@ from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
 from zotero_arxiv_daily.protocol import CorpusPaper
-from zotero_arxiv_daily.protocol import Paper
-from types import SimpleNamespace
-from threading import Barrier, Lock
+
+
+def test_preview_selects_only_top_five_without_delivery(config, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from tests.canned_responses import make_sample_paper, make_sample_corpus
+    from zotero_arxiv_daily.delivery import DeliveryState
+    from zotero_arxiv_daily.protocol import Paper
+    executor = Executor.__new__(Executor)
+    config.executor.max_paper_num = 5
+    executor.config = config
+    executor.delivery = DeliveryState(tmp_path)
+    executor.openai_client = None
+    executor.fetch_zotero_corpus = lambda: make_sample_corpus()
+    executor.filter_corpus = lambda papers: papers
+    papers = [make_sample_paper(url=f'https://arxiv.org/abs/2610.{i:05d}', score=float(i)) for i in range(8)]
+    executor.retrievers = {'arxiv': SimpleNamespace(retrieve_metadata=lambda: papers)}
+    executor.reranker = SimpleNamespace(rerank=lambda candidates, corpus: sorted(candidates, key=lambda p: -p.score))
+    summarized = []
+    def summarize(paper, *args):
+        summarized.append(paper.url)
+        paper.tldr = 'Summary'
+    monkeypatch.setattr(Paper, 'generate_tldr', summarize)
+    monkeypatch.setattr('zotero_arxiv_daily.executor.send_email', lambda *args: pytest.fail('Preview must not send'))
+    result = executor.run(dry_run=True)
+    assert [p.score for p in result] == [7, 6, 5, 4, 3]
+    assert len(summarized) == 5
+    assert executor.report['delivery'] == 'preview'
+    assert not (tmp_path / 'delivery.json').exists()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +139,7 @@ def test_fetch_zotero_corpus(config, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
 
     executor = Executor.__new__(Executor)
+    config.executor.max_paper_num = 5
     executor.config = config
     corpus = executor.fetch_zotero_corpus()
 
@@ -139,6 +165,7 @@ def test_fetch_zotero_corpus_paper_with_zero_collections(config, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
 
     executor = Executor.__new__(Executor)
+    config.executor.max_paper_num = 5
     executor.config = config
     corpus = executor.fetch_zotero_corpus()
 
@@ -284,70 +311,3 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
-
-
-def test_rank_before_enrichment_top20_and_preview(config, monkeypatch):
-    config.executor.fulltext_workers = 3
-    config.executor.llm_workers = 4
-    config.executor.max_paper_num = 20
-    papers = [Paper(source="arxiv", title=str(i), authors=[], abstract="abstract",
-                    url=f"https://example.com/{i}", score=float(i)) for i in range(30)]
-    downloaded, summarized = [], []
-    guard = Lock()
-
-    def enrich(paper):
-        with guard:
-            downloaded.append(paper.url)
-        if paper.title == "29":
-            raise ValueError("PDF not available")
-        paper.full_text = "full text"
-
-    def rank(candidates, corpus):
-        assert len(candidates) == 30
-        assert all(p.full_text is None for p in candidates)
-        return sorted(candidates, key=lambda p: p.score, reverse=True)
-
-    executor = Executor.__new__(Executor)
-    executor.config = config
-    executor.fetch_zotero_corpus = lambda: [object()]
-    executor.filter_corpus = lambda c: c
-    executor.retrievers = {"arxiv": SimpleNamespace(retrieve_metadata=lambda: papers, enrich_paper=enrich)}
-    executor.reranker = SimpleNamespace(rerank=rank)
-    executor.openai_client = None
-
-    def summarize(paper):
-        assert paper.url in downloaded
-        with guard:
-            summarized.append(paper.url)
-        paper.tldr = "summary"
-
-    executor._summarize_paper = summarize
-    monkeypatch.setattr("zotero_arxiv_daily.executor.send_email", lambda *a: pytest.fail("Preview sent email"))
-    selected = executor.run(dry_run=True)
-    assert [p.title for p in selected] == [str(i) for i in range(29, 9, -1)]
-    assert set(downloaded) == set(summarized) == {p.url for p in selected}
-    assert len(downloaded) == 20
-    assert selected[0].full_text is None  # Failed enrichment retains the ranked paper.
-    assert all(p.tldr == "summary" for p in selected)
-    assert {"zotero", "metadata", "ranking", "fulltext", "summaries", "total"} <= executor.stage_timings.keys()
-
-
-def test_parallelism_is_bounded_and_really_overlaps():
-    barrier = Barrier(3)
-    lock = Lock()
-    active = peak = 0
-    completed = []
-
-    def work(item):
-        nonlocal active, peak
-        with lock:
-            active += 1
-            peak = max(peak, active)
-        barrier.wait(timeout=5)
-        with lock:
-            active -= 1
-            completed.append(item)
-
-    Executor._parallel(list(range(3)), work, 3, "test")
-    assert peak == 3
-    assert sorted(completed) == [0, 1, 2]

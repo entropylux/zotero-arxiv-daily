@@ -5,12 +5,15 @@ import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
+from omegaconf import OmegaConf
 RawPaperItem = TypeVar('RawPaperItem')
 
 
 def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) -> str:
     api_mode = llm_params.get("api_mode", "chat_completion")
-    generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
+    generation_kwargs = llm_params.get("generation_kwargs", {})
+    generation_kwargs = (OmegaConf.to_container(generation_kwargs, resolve=True)
+                         if OmegaConf.is_config(generation_kwargs) else dict(generation_kwargs))
 
     if api_mode == "chat_completion":
         response = openai_client.chat.completions.create(
@@ -50,7 +53,7 @@ class Paper:
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
-        prompt = f"Given the following information of a paper, generate a one-sentence TLDR summary in {lang}:\n\n"
+        prompt = f"Summarize this paper in one concise sentence in {lang}, preserving important assumptions. For Chinese, aim for 60–140 characters. Use only the supplied content:\n\n"
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
 
@@ -71,7 +74,7 @@ class Paper:
         prompt = enc.decode(prompt_tokens)
         
         tldr = _request_llm(
-            openai_client,
+            openai_client.with_options(timeout=45, max_retries=0),
             llm_params,
             [
                 {
@@ -81,7 +84,9 @@ class Paper:
                 {"role": "user", "content": prompt},
             ],
         )
-        return tldr
+        if not isinstance(tldr, str) or not tldr.strip() or len(tldr) > 1200:
+            raise ValueError('Invalid TLDR response')
+        return tldr.strip()
     
     def generate_tldr(self, openai_client:OpenAI,llm_params:dict) -> str:
         try:
@@ -89,7 +94,7 @@ class Paper:
             self.tldr = tldr
             return tldr
         except Exception as e:
-            logger.warning(f"Failed to generate tldr of {self.url}: {e}")
+            logger.warning(f"TLDR unavailable for {self.url} ({type(e).__name__}); using abstract")
             tldr = self.abstract
             self.tldr = tldr
             return tldr

@@ -61,7 +61,7 @@ def make_stub_openai_client():
     chat.completions.create(), responses.create(), and embeddings.create() behave identically
     to the Docker mock_openai server that CI previously relied on.
     """
-    return SimpleNamespace(
+    client = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(create=_stub_chat_create),
         ),
@@ -69,6 +69,10 @@ def make_stub_openai_client():
         embeddings=SimpleNamespace(create=_stub_embeddings_create),
     )
 
+    client.with_options = lambda **kwargs: client
+    return client
+    client.with_options = lambda **kwargs: client
+    return client
 
 # ---------------------------------------------------------------------------
 # Zotero client stub
@@ -151,7 +155,7 @@ def make_stub_smtp(sent_emails: list):
         def __init__(self, *args, **kwargs):
             pass
 
-        def starttls(self, *, context):
+        def starttls(self, **kwargs):
             pass
 
         def login(self, user, password):
@@ -160,10 +164,13 @@ def make_stub_smtp(sent_emails: list):
         def sendmail(self, sender, recipients, msg):
             sent_emails.append((sender, recipients, msg))
 
-        def quit(self):
+        def close(self):
             pass
 
         def close(self):
+            pass
+
+        def quit(self):
             pass
 
     return StubSMTP
