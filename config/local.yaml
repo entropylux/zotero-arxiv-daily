@@ -10,7 +10,7 @@ zotero:
 source:
   arxiv:
     category: [quant-ph, cond-mat.dis-nn, cond-mat.other, cond-mat.quant-gas, cond-mat.stat-mech, cond-mat.str-el, cond-mat.supr-con]
-    include_cross_list: false
+    include_cross_list: true
 
 email:
   sender: ${oc.env:SENDER}
@@ -26,10 +26,8 @@ llm:
   api_mode: ${oc.env:LLM_API_MODE,chat_completion}
   language: Chinese
   generation_kwargs:
+    max_tokens: 1024
     model: ${oc.env:LLM_MODEL,glm-5.3-flash}
-    extra_body:
-      thinking:
-        type: disabled
 
 executor:
   debug: false
@@ -37,3 +35,12 @@ executor:
   source: [arxiv]
   reranker: local
   max_paper_num: 20
+
+reranker:
+  local:
+    model: jinaai/jina-embeddings-v5-text-nano-retrieval
+    device: auto
+    revision: ac5d898c8d382b17167c33e5c8af644a3519b47d
+    encode_kwargs:
+      task: retrieval
+      prompt_name: document

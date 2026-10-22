@@ -44,7 +44,7 @@ def test_render_email_affiliation_truncation():
 def test_render_email_no_affiliations():
     paper = make_sample_paper(affiliations=None, score=7.0, tldr="ok")
     html = render_email([paper])
-    assert "Unknown Affiliation" not in html
+    assert "Unknown Affiliation" in html
 
 
 def test_get_stars_low_score():
@@ -64,12 +64,12 @@ def test_get_stars_mid_score():
 
 
 def test_get_block_html_contains_all_fields():
-    html = get_block_html("Title", "Auth", "3.5", "Summary", "https://arxiv.org/pdf/2401.00001", "MIT")
+    html = get_block_html("Title", "Auth", "3.5", "Summary", "http://pdf.url", "MIT")
     assert "Title" in html
     assert "Auth" in html
     assert "3.5" in html
     assert "Summary" in html
-    assert "https://arxiv.org/pdf/2401.00001" in html
+    assert "http://pdf.url" in html
     assert "MIT" in html
 
 

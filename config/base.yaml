@@ -16,7 +16,6 @@ source:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
-  tls_mode: auto
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
   receiver: ??? # The email account that receives the paper list. Example: abc@outlook.com
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
@@ -30,14 +29,12 @@ llm:
   api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
   generation_kwargs:
   # Arguments for the selected LLM API.
-    max_tokens: 1024
+    max_tokens: 16384
     model: ???
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
   local:
-    device: auto
-    revision: ac5d898c8d382b17167c33e5c8af644a3519b47d
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:
     # The kwargs for the encode method of the local embedding model. Details see [here](https://www.sbert.net/docs/package_reference/SentenceTransformer.html#sentence_transformers.SentenceTransformer.encode)
@@ -50,10 +47,8 @@ reranker:
     batch_size: null # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
 
 executor:
-  llm_workers: 2 # Summarize only selected abstracts, with bounded concurrency.
-  state_dir: null # Local launcher sets this for delivery history.
   debug: false # Whether to use debug mode. Example: true
   send_empty: false # Whether to send an empty email even if no new papers today. Example: true
-  max_paper_num: 20 # Small daily digest, ranked only by the Zotero library.
+  max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'

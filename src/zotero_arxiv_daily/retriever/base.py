@@ -21,13 +21,6 @@ class BaseRetriever(ABC):
     def convert_to_paper(self, raw_paper:RawPaperItem) -> Paper | None:
         pass
 
-    def retrieve_metadata(self) -> list[Paper]:
-        """Legacy sources may already return fully populated papers."""
-        return self.retrieve_papers()
-
-    def enrich_paper(self, paper: Paper) -> None:
-        """Optionally load full text after ranking; no-op for legacy sources."""
-
     def retrieve_papers(self) -> list[Paper]:
         raw_papers = self._retrieve_raw_papers()
         logger.info("Processing papers...")

@@ -1,19 +1,17 @@
 from dataclasses import dataclass
 from typing import Optional, TypeVar
 from datetime import datetime
+import re
 import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
-from omegaconf import OmegaConf
 RawPaperItem = TypeVar('RawPaperItem')
 
 
 def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) -> str:
     api_mode = llm_params.get("api_mode", "chat_completion")
-    generation_kwargs = llm_params.get("generation_kwargs", {})
-    generation_kwargs = (OmegaConf.to_container(generation_kwargs, resolve=True)
-                         if OmegaConf.is_config(generation_kwargs) else dict(generation_kwargs))
+    generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
 
     if api_mode == "chat_completion":
         response = openai_client.chat.completions.create(
@@ -53,7 +51,7 @@ class Paper:
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
-        prompt = f"Summarize this paper in one concise sentence in {lang}, preserving important assumptions. For Chinese, aim for 60–140 characters. Use only the supplied content:\n\n"
+        prompt = f"Given the following information of a paper, generate a one-sentence TLDR summary in {lang}:\n\n"
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
 
@@ -74,7 +72,7 @@ class Paper:
         prompt = enc.decode(prompt_tokens)
         
         tldr = _request_llm(
-            openai_client.with_options(timeout=45, max_retries=0),
+            openai_client,
             llm_params,
             [
                 {
@@ -84,9 +82,7 @@ class Paper:
                 {"role": "user", "content": prompt},
             ],
         )
-        if not isinstance(tldr, str) or not tldr.strip() or len(tldr) > 1200:
-            raise ValueError('Invalid TLDR response')
-        return tldr.strip()
+        return tldr
     
     def generate_tldr(self, openai_client:OpenAI,llm_params:dict) -> str:
         try:
@@ -94,7 +90,7 @@ class Paper:
             self.tldr = tldr
             return tldr
         except Exception as e:
-            logger.warning(f"TLDR unavailable for {self.url} ({type(e).__name__}); using abstract")
+            logger.warning(f"Failed to generate tldr of {self.url}: {e}")
             tldr = self.abstract
             self.tldr = tldr
             return tldr
@@ -119,13 +115,10 @@ class Paper:
                 ],
             )
 
-            if not isinstance(affiliations, str) or len(affiliations) > 8192:
-                raise ValueError("Invalid affiliation response size")
+            affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
             affiliations = json.loads(affiliations)
-            if (not isinstance(affiliations, list) or len(affiliations) > 32
-                    or any(not isinstance(a, str) or len(a) > 256 for a in affiliations)):
-                raise ValueError("Expected a bounded JSON list of affiliation strings")
-            affiliations = list(dict.fromkeys(a.strip() for a in affiliations if a.strip()))
+            affiliations = list(set(affiliations))
+            affiliations = [str(a) for a in affiliations]
 
             return affiliations
     

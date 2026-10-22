@@ -1,5 +1,3 @@
-> 本地部署说明（2026-10-10）：以 LOCAL_WINDOWS.md 和 AGENTS.md 为准。当前仅依赖 Zotero 文献库排序，每天最多 20 篇，摘要生成 TLDR；旧兴趣/作者加权与取证流程已停用。以下保留上游通用说明。
-
 # Copilot Instructions
 
 ## Project Overview

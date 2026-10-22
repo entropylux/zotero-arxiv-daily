@@ -1,4 +1,4 @@
-"""Windows local entry point; run with the user-selected Python interpreter."""
+"""Run the upstream daily digest with isolated local dependencies and state."""
 import argparse
 from datetime import datetime
 import json
@@ -15,7 +15,6 @@ REQUIRED = ("ZOTERO_ID", "ZOTERO_KEY", "SENDER", "RECEIVER", "SENDER_PASSWORD",
 
 
 def prepare():
-    # Keep unrelated globally installed ML packages out of this runtime.
     sys.path[:] = [p for p in sys.path if "site-packages" not in p.lower()]
     runtime_paths = [str(ROOT / "src"), str(CUDA_DEPS), str(DEPS)]
     sys.path[:0] = runtime_paths
@@ -35,22 +34,19 @@ def prepare():
     from omegaconf import OmegaConf
     with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
         config = compose(config_name="local")
-        config.executor.state_dir = str(ROOT / '.local-state')
         OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
-    from zotero_arxiv_daily.executor import Executor  # Verify runtime imports too.
-    return config
+    from zotero_arxiv_daily.executor import Executor
+    return config, Executor
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="Validate config/imports without network or email")
-    parser.add_argument("--force", action="store_true", help="Allow another run after today's success")
-    parser.add_argument("--preview", action="store_true", help="Run the full pipeline without sending email")
+    parser.add_argument("--check", action="store_true", help="Check configuration without network or email")
+    parser.add_argument("--force", action="store_true", help="Allow another run after today's successful run")
     args = parser.parse_args()
     try:
-        config = prepare()
+        config, _ = prepare()
     except Exception as exc:
-        # Report missing variable names, never resolved config or credential values.
         if isinstance(exc, ValueError) and str(exc).startswith("Fill .env.local"):
             print(str(exc), file=sys.stderr)
         else:
@@ -63,22 +59,19 @@ def main():
     from filelock import FileLock, Timeout
     state_dir = ROOT / ".local-state"
     state_dir.mkdir(exist_ok=True)
-    status_path = state_dir / ("preview-status.json" if args.preview else "status.json")
+    status_path = state_dir / "status.json"
     try:
         with FileLock(state_dir / "run.lock", timeout=0):
             today = datetime.now().date().isoformat()
-            previous = json.loads(status_path.read_text()) if status_path.exists() else {}
-            if previous.get("success_date") == today and not args.force and not args.preview:
+            previous = json.loads(status_path.read_text(encoding="utf-8")) if status_path.exists() else {}
+            if previous.get("success_date") == today and not args.force:
                 print("Already completed today; skipping duplicate email.")
                 return 0
             log_dir = ROOT / "logs" / "local"
             log_dir.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            log_path = log_dir / f"{stamp}.log"
+            log_path = log_dir / f"{datetime.now():%Y%m%d-%H%M%S}.log"
             secrets = [os.environ[key] for key in ("ZOTERO_KEY", "SENDER_PASSWORD", "OPENAI_API_KEY")]
             command = [sys.executable, "-S", "-u", str(ROOT / "scripts/local_worker.py")]
-            if args.preview:
-                command.append("--preview")
             started = datetime.now().isoformat()
             with log_path.open("w", encoding="utf-8") as log:
                 log.write(f"Started: {started}\n")
@@ -94,7 +87,7 @@ def main():
                 log.write(f"\nExit code: {code}\n")
             status = {"started": started, "finished": datetime.now().isoformat(),
                       "exit_code": code, "log": str(log_path),
-                      "success_date": today if code == 0 and not args.preview else previous.get("success_date")}
+                      "success_date": today if code == 0 else previous.get("success_date")}
             temporary = status_path.with_suffix(".tmp")
             temporary.write_text(json.dumps(status, indent=2), encoding="utf-8")
             temporary.replace(status_path)

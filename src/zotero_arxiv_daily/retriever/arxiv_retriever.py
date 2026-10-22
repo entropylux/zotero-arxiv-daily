@@ -1,17 +1,22 @@
 from .base import BaseRetriever, register_retriever
+import arxiv
 from arxiv import Result as ArxivResult
 from ..protocol import Paper
 from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar
-from tempfile import TemporaryDirectory
-import feedparser
+import calendar
+from datetime import datetime, timezone
 import multiprocessing
 import os
 from queue import Empty
+import re
+from tempfile import TemporaryDirectory
+import time
+from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
-import time
-from .. import resource_limits as limits
+import feedparser
+from tqdm import tqdm
 
 T = TypeVar("T")
 
@@ -19,106 +24,187 @@ DOWNLOAD_TIMEOUT = (10, 60)
 PDF_EXTRACT_TIMEOUT = 180
 TAR_EXTRACT_TIMEOUT = 180
 
+HTML_TAG_PATTERN = re.compile(
+    r"</?(?:p|a|span|div|b|i|strong|em|br|hr|h[1-6]|ul|ol|li|sub|sup|table|tr|td|th)\b(?:\s+[^>]*)?/?>",
+    flags=re.IGNORECASE,
+)
+ARXIV_HEADER_PATTERN = re.compile(
+    r"^(?:arxiv:\s*\S+(?:\s+\[[^\]]*\])?)?\s*(?:announce\s+type:\s*[\w-]+)?\s*(?:abstract:\s*)?",
+    flags=re.IGNORECASE,
+)
+
 
 def _download_file(url: str, path: str) -> None:
-    started = time.monotonic()
-    try:
-        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
-            response.raise_for_status()
-            length = response.headers.get("Content-Length")
-            if length is not None and int(length) > limits.MAX_DOWNLOAD_BYTES:
-                raise limits.ResourceLimitError("Download Content-Length exceeds quota")
-            size = 0
-            with open(path, "wb") as file:
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if time.monotonic() - started > 60:
-                        raise limits.ResourceLimitError("Download deadline exceeded")
-                    size += len(chunk)
-                    if size > limits.MAX_DOWNLOAD_BYTES:
-                        raise limits.ResourceLimitError("Download byte quota exceeded")
+    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+        response.raise_for_status()
+        with open(path, "wb") as file:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
                     file.write(chunk)
-    except BaseException:
-        if os.path.exists(path):
-            os.remove(path)
-        raise
 
 
-def _run_in_subprocess(result_queue, func, args, temp_dir):
+def _run_in_subprocess(
+    result_queue: Any,
+    func: Callable[..., T | None],
+    args: tuple[Any, ...],
+) -> None:
     try:
-        memory_guard = limits.limit_worker_memory()
-        result = func(*args, temp_dir=temp_dir) if temp_dir is not None else func(*args)
-        result_queue.put(("ok", limits.bounded_text(result)))
+        result_queue.put(("ok", func(*args)))
     except Exception as exc:
-        result_queue.put(("error", f"{type(exc).__name__}: {str(exc)[:1000]}"))
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
 def _run_with_hard_timeout(
-    func: Callable[..., T | None], args: tuple[Any, ...], *, timeout: float,
-    operation: str, paper_title: str, temporary_files: bool = False,
+    func: Callable[..., T | None],
+    args: tuple[Any, ...],
+    *,
+    timeout: float,
+    operation: str,
+    paper_title: str,
 ) -> T | None:
-    # The parent owns the directory so kill/timeout cannot strand downloaded files.
-    with TemporaryDirectory(prefix="arxiv-fulltext-") as temp_dir:
-        context = multiprocessing.get_context("spawn")
-        result_queue = context.Queue(maxsize=1)
-        process = context.Process(target=_run_in_subprocess, args=(
-            result_queue, func, args, temp_dir if temporary_files else None))
-        process.start()
-        deadline = time.monotonic() + timeout
-        try:
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    logger.warning(f"{operation} timed out for {paper_title} after {timeout} seconds")
-                    return None
-                try:
-                    status, payload = result_queue.get(timeout=min(0.1, remaining))
-                    break
-                except Empty:
-                    if not process.is_alive():
-                        logger.warning(f"{operation} worker exited for {paper_title}")
-                        return None
-            if status == "ok":
-                return limits.bounded_text(payload)
-            logger.warning(f"{operation} failed for {paper_title}: {payload}")
-            return None
-        finally:
-            process.join(0.2)
-            if process.is_alive():
-                process.kill()
-            process.join()
-            process.close()
-            result_queue.close()
-            result_queue.join_thread()
+    start_methods = multiprocessing.get_all_start_methods()
+    context = multiprocessing.get_context("fork" if "fork" in start_methods else start_methods[0])
+    result_queue = context.Queue()
+    process = context.Process(target=_run_in_subprocess, args=(result_queue, func, args))
+    process.start()
+
+    try:
+        status, payload = result_queue.get(timeout=timeout)
+    except Empty:
+        if process.is_alive():
+            process.kill()
+        process.join(5)
+        result_queue.close()
+        result_queue.join_thread()
+        logger.warning(f"{operation} timed out for {paper_title} after {timeout} seconds")
+        return None
+
+    process.join(5)
+    result_queue.close()
+    result_queue.join_thread()
+
+    if status == "ok":
+        return payload
+
+    logger.warning(f"{operation} failed for {paper_title}: {payload}")
+    return None
 
 
-def _extract_text_from_pdf_worker(pdf_url: str, *, temp_dir: str) -> str:
-    path = os.path.join(temp_dir, "paper.pdf")
-    _download_file(pdf_url, path)
-    return limits.bounded_text(extract_markdown_from_pdf(path))
+def _extract_text_from_pdf_worker(pdf_url: str) -> str:
+    with TemporaryDirectory() as temp_dir:
+        path = os.path.join(temp_dir, "paper.pdf")
+        _download_file(pdf_url, path)
+        return extract_markdown_from_pdf(path)
 
 
-def _extract_text_from_html_worker(html_url: str, *, temp_dir: str) -> str | None:
+def _extract_text_from_html_worker(html_url: str) -> str | None:
     import trafilatura
-    path = os.path.join(temp_dir, "paper.html")
-    _download_file(html_url, path)
-    with open(path, "rb") as file:
-        downloaded = file.read(limits.MAX_DOWNLOAD_BYTES + 1)
-    if len(downloaded) > limits.MAX_DOWNLOAD_BYTES:
-        raise limits.ResourceLimitError("HTML input quota exceeded")
+
+    downloaded = trafilatura.fetch_url(html_url)
+    if downloaded is None:
+        raise ValueError(f"Failed to download HTML from {html_url}")
     text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
     if not text:
-        raise ValueError("No text extracted from HTML")
-    return limits.bounded_text(text)
+        raise ValueError(f"No text extracted from {html_url}")
+    return text
 
 
-def _extract_text_from_tar_worker(source_url: str, paper_id: str,
-                                  paper_title: str | None = None, *, temp_dir: str) -> str | None:
-    path = os.path.join(temp_dir, "paper.tar.gz")
-    _download_file(source_url, path)
-    file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
-    if not file_contents or "all" not in file_contents:
-        raise ValueError("Main tex file not found.")
-    return limits.bounded_text(file_contents["all"])
+def _extract_text_from_tar_worker(source_url: str, paper_id: str, paper_title: str | None = None) -> str | None:
+    with TemporaryDirectory() as temp_dir:
+        path = os.path.join(temp_dir, "paper.tar.gz")
+        _download_file(source_url, path)
+        file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
+        if not file_contents or "all" not in file_contents:
+            raise ValueError("Main tex file not found.")
+        return file_contents["all"]
+
+
+def _clean_abstract(summary_raw: str) -> str:
+    cleaned = HTML_TAG_PATTERN.sub(" ", summary_raw).strip()
+    cleaned = ARXIV_HEADER_PATTERN.sub("", cleaned).strip()
+    cleaned = re.sub(r"^abstract:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    return " ".join(cleaned.split())
+
+
+def _extract_authors(entry: Any) -> list[ArxivResult.Author]:
+    author_str = getattr(entry, "author", "") or ""
+    if not author_str and hasattr(entry, "authors") and entry.authors:
+        author_str = ", ".join(
+            a.get("name", "") if isinstance(a, dict) else getattr(a, "name", str(a))
+            for a in entry.authors
+        )
+    author_names = [a.strip() for a in author_str.split(",") if a.strip()]
+    if not author_names:
+        author_names = ["Unknown"]
+    return [ArxivResult.Author(name=name) for name in author_names]
+
+
+def _parse_entry_time(struct_time: Any) -> datetime:
+    if struct_time:
+        try:
+            return datetime.fromtimestamp(calendar.timegm(struct_time), tz=timezone.utc)
+        except Exception:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _entry_to_arxiv_result(entry: Any) -> ArxivResult:
+    raw_id = getattr(entry, "id", "") or ""
+    paper_id = raw_id.removeprefix("oai:arXiv.org:")
+    title_raw = getattr(entry, "title", "") or ""
+    title = " ".join(title_raw.split())
+
+    authors = _extract_authors(entry)
+    summary = _clean_abstract(getattr(entry, "summary", "") or "")
+
+    link = getattr(entry, "link", "") or f"https://arxiv.org/abs/{paper_id}"
+    pdf_url = f"https://arxiv.org/pdf/{paper_id}"
+    source_url = f"https://arxiv.org/src/{paper_id}"
+
+    tags = getattr(entry, "tags", []) or []
+    categories = [
+        t.get("term") for t in tags
+        if isinstance(t, dict) and t.get("term")
+    ]
+    # Prefer Atom's authoritative arxiv:primary_category field, with fallback to first category
+    primary_category = ""
+    arxiv_primary = getattr(entry, "arxiv_primary_category", None)
+    if isinstance(arxiv_primary, dict):
+        primary_category = arxiv_primary.get("term", "") or ""
+    elif hasattr(arxiv_primary, "term"):
+        primary_category = getattr(arxiv_primary, "term", "") or ""
+    elif isinstance(arxiv_primary, str):
+        primary_category = arxiv_primary
+
+    if not primary_category and categories:
+        primary_category = categories[0]
+
+    published = _parse_entry_time(getattr(entry, "published_parsed", None))
+    updated = _parse_entry_time(getattr(entry, "updated_parsed", None))
+    comment = getattr(entry, "arxiv_comment", "") or ""
+    journal_ref = getattr(entry, "arxiv_journal_reference", "") or getattr(entry, "arxiv_journal_ref", "") or ""
+    doi = getattr(entry, "arxiv_doi", "") or ""
+
+    links = [
+        ArxivResult.Link(href=link, rel="alternate"),
+        ArxivResult.Link(href=pdf_url, title="pdf", rel="related"),
+        ArxivResult.Link(href=source_url, title="source", rel="related"),
+    ]
+
+    return ArxivResult(
+        entry_id=link,
+        updated=updated,
+        published=published,
+        title=title,
+        authors=authors,
+        summary=summary,
+        comment=comment,
+        journal_ref=journal_ref,
+        doi=doi,
+        primary_category=primary_category,
+        categories=categories,
+        links=links,
+    )
 
 
 @register_retriever("arxiv")
@@ -129,177 +215,78 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        """Read daily metadata from Atom without a second export-API query.
+        query = '+'.join(self.config.source.arxiv.category)
+        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
+        rss_url = f"https://rss.arxiv.org/atom/{query}"
 
-        This bridge populates the Result fields consumed by this application.
-        Atom's feed timestamps are NOT treated as paper submission/update dates;
-        Result's unused date fields retain their library defaults.
-        """
-        import re
-        from html.parser import HTMLParser
+        # Get latest papers from arxiv RSS feed with retry
+        retry_num = 5
+        delay_time = 5
+        feed = None
+        for attempt in range(retry_num):
+            feed = feedparser.parse(rss_url)
+            status = getattr(feed, "status", None)
+            bozo = getattr(feed, "bozo", False)
+            bozo_exc = getattr(feed, "bozo_exception", None)
+            feed_meta = getattr(feed, "feed", None)
+            title = getattr(feed_meta, "title", "") if feed_meta else ""
 
-        class TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__(convert_charrefs=True)
-                self.parts = []
+            if title and "Feed error for query" in title:
+                raise Exception(f"Invalid ARXIV_QUERY: {query}.")
 
-            def handle_starttag(self, tag, attrs):
-                if tag in {"p", "br", "div"}:
-                    self.parts.append("\n")
+            # Validate HTTP status and parser state before accepting the feed
+            is_http_error = status is not None and status >= 400
+            is_parser_error = bool(bozo and not getattr(feed, "entries", None))
+            has_valid_feed = bool(feed_meta and title and not is_http_error and not is_parser_error)
 
-            def handle_endtag(self, tag):
-                if tag in {"p", "div"}:
-                    self.parts.append("\n")
-
-            def handle_data(self, data):
-                self.parts.append(data)
-
-        def text_field(entry, key):
-            value = str(entry.get(key, ""))
-            kind = str(entry.get(f"{key}_detail", {}).get("type", "text/plain"))
-            if "html" in kind:
-                parser = TextExtractor()
-                parser.feed(value)
-                parser.close()
-                value = "".join(parser.parts)
-            return value.strip()
-
-        def split_creator(value):
-            # dc:creator is comma-separated. Preserve commas in affiliations.
-            names, current, depth = [], [], 0
-            for char in value:
-                if char in "([":
-                    depth += 1
-                elif char in ")]":
-                    depth = max(0, depth - 1)
-                if char == "," and depth == 0:
-                    names.append("".join(current).strip())
-                    current = []
-                else:
-                    current.append(char)
-            names.append("".join(current).strip())
-            merged = []
-            for name in filter(None, names):
-                if name.lower().rstrip(".") in {"jr", "sr", "ii", "iii", "iv"} and merged:
-                    merged[-1] += ", " + name
-                else:
-                    merged.append(name)
-            return merged
-
-        query = "+".join(self.config.source.arxiv.category)
-        url = f"https://rss.arxiv.org/atom/{query}"
-        logger.info(f"Fetching arXiv Atom metadata: {query}")
-        # One bounded request; do not repeatedly hammer a throttled endpoint.
-        with requests.get(
-            url,
-            timeout=DOWNLOAD_TIMEOUT,
-            headers={"User-Agent": "zotero-arxiv-daily/Atom-metadata"},
-        ) as response:
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After", "not specified")
-                raise RuntimeError(
-                    "arXiv Atom feed returned HTTP 429; stopping without further "
-                    f"requests. Retry-After: {retry_after}. Retry later."
-                )
-            response.raise_for_status()
-            feed = feedparser.parse(response.content)
-
-        if not feed.get("version"):
-            raise RuntimeError("arXiv returned a non-feed response, not a valid Atom feed.")
-        if "Feed error for query" in feed.feed.get("title", ""):
-            raise ValueError(f"Invalid ARXIV_QUERY: {query}.")
-        if feed.get("bozo"):
-            raise RuntimeError(f"Malformed arXiv Atom feed: {feed.get('bozo_exception')}")
-
-        include_cross = self.config.source.arxiv.get("include_cross_list", False)
-        allowed = {"new", "cross"} if include_cross else {"new"}
-        raw_papers, seen = [], set()
-        identifier_pattern = re.compile(
-            r"(?:\d{4}\.\d{4,5}|[A-Za-z][A-Za-z0-9.-]*/\d{7})(?:v\d+)?"
-        )
-        for entry in feed.entries:
-            if entry.get("arxiv_announce_type", "new") not in allowed:
-                continue
-            paper_id = str(entry.get("id", "")).removeprefix("oai:arXiv.org:")
-            if "/abs/" in paper_id:
-                paper_id = paper_id.split("/abs/", 1)[1]
-            if not identifier_pattern.fullmatch(paper_id):
-                raise ValueError(f"Unrecognized arXiv Atom identifier: {paper_id!r}")
-            if paper_id in seen:
-                continue
-            seen.add(paper_id)
-
-            title = " ".join(text_field(entry, "title").split())
-            abstract = text_field(entry, "summary")
-            # Atom's summary prepends ID and announcement metadata, unlike API summary.
-            abstract = re.sub(
-                r"\A\s*arXiv:\S+\s+Announce Type:\s*\S+\s+Abstract:\s*",
-                "", abstract, count=1, flags=re.IGNORECASE,
-            )
-            if not title or not abstract:
-                raise ValueError(f"Missing title or abstract in Atom entry {paper_id}")
-
-            author_fields = [a.get("name", "").strip() for a in entry.get("authors", [])]
-            author_fields = [name for name in author_fields if name]
-            if not author_fields:
-                author_fields = [str(entry.get("author") or entry.get("dc_creator") or "")]
-            # feedparser maps dc:creator to one flattened author entry.
-            names = split_creator(author_fields[0]) if len(author_fields) == 1 else author_fields
-            if not names:
-                logger.warning(f"No authors supplied in Atom entry {paper_id}")
-            categories = [t["term"] for t in entry.get("tags", []) if t.get("term")]
-            raw_papers.append(ArxivResult(
-                entry_id=f"https://arxiv.org/abs/{paper_id}",
-                title=title,
-                authors=[ArxivResult.Author(name) for name in names],
-                summary=abstract,
-                categories=categories,
-                # Do not infer an undocumented primary-category ordering.
-                primary_category="",
-                journal_ref=entry.get("arxiv_journal_reference", ""),
-                doi=entry.get("arxiv_doi", ""),
-                links=[ArxivResult.Link(
-                    href=f"https://arxiv.org/pdf/{paper_id}",
-                    title="pdf", rel="related", content_type="application/pdf",
-                )],
-            ))
-            if self.config.executor.debug and len(raw_papers) >= 10:
+            if has_valid_feed:
                 break
 
-        logger.info(
-            f"Loaded {len(raw_papers)} arXiv paper metadata records from Atom; "
-            "export.arxiv.org API was not used."
-        )
+            error_msg = f"status={status}" if status is not None else f"bozo_exception={bozo_exc}"
+            if attempt < retry_num - 1:
+                logger.warning(
+                    f"Failed to fetch valid arxiv RSS feed ({error_msg}), retrying in {delay_time}s..."
+                )
+                sleep(delay_time)
+        else:
+            status = getattr(feed, "status", None)
+            bozo_exc = getattr(feed, "bozo_exception", None)
+            raise RuntimeError(
+                f"Failed to fetch valid arxiv RSS feed from {rss_url} after {retry_num} attempts "
+                f"(status={status}, bozo_exception={bozo_exc})"
+            )
+
+        allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
+        target_entries = [
+            i for i in feed.entries
+            if i.get("arxiv_announce_type", "new") in allowed_announce_types
+        ]
+        if self.config.executor.debug:
+            target_entries = target_entries[:10]
+
+        seen_paper_ids = set()
+        raw_papers = []
+        for entry in target_entries:
+            raw_id = getattr(entry, "id", "") or ""
+            paper_id = raw_id.removeprefix("oai:arXiv.org:")
+            if paper_id and paper_id in seen_paper_ids:
+                continue
+            if paper_id:
+                seen_paper_ids.add(paper_id)
+            raw_papers.append(_entry_to_arxiv_result(entry))
+
         return raw_papers
 
-    def retrieve_metadata(self) -> list[Paper]:
-        raw_papers = self._retrieve_raw_papers()
-        self._raw_by_url = {p.entry_id: p for p in raw_papers}
-        return [self._metadata_to_paper(p) for p in raw_papers]
-
-    def enrich_paper(self, paper: Paper) -> None:
-        raw_paper = self._raw_by_url[paper.url]
-        paper.full_text = self._extract_full_text(raw_paper)
-
-    @staticmethod
-    def _extract_full_text(raw_paper: ArxivResult) -> str | None:
+    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
+        title = raw_paper.title
+        authors = [a.name for a in raw_paper.authors]
+        abstract = raw_paper.summary
+        pdf_url = raw_paper.pdf_url
         full_text = extract_text_from_tar(raw_paper)
         if full_text is None:
             full_text = extract_text_from_html(raw_paper)
         if full_text is None:
             full_text = extract_text_from_pdf(raw_paper)
-        return full_text
-
-    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        paper = self._metadata_to_paper(raw_paper)
-        paper.full_text = self._extract_full_text(raw_paper)
-        return paper
-
-    def _metadata_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        title = raw_paper.title
-        authors = [a.name for a in raw_paper.authors]
-        abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
         return Paper(
             source=self.name,
             title=title,
@@ -307,16 +294,17 @@ class ArxivRetriever(BaseRetriever):
             abstract=abstract,
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
-            full_text=None,
+            full_text=full_text,
         )
 
 
 def extract_text_from_html(paper: ArxivResult) -> str | None:
     html_url = paper.entry_id.replace("/abs/", "/html/")
-    return _run_with_hard_timeout(
-        _extract_text_from_html_worker, (html_url,), timeout=90,
-        operation="HTML extraction", paper_title=paper.title, temporary_files=True,
-    )
+    try:
+        return _extract_text_from_html_worker(html_url)
+    except Exception as exc:
+        logger.warning(f"HTML extraction failed for {paper.title}: {exc}")
+        return None
 
 
 def extract_text_from_pdf(paper: ArxivResult) -> str | None:
@@ -327,7 +315,7 @@ def extract_text_from_pdf(paper: ArxivResult) -> str | None:
         _extract_text_from_pdf_worker,
         (paper.pdf_url,),
         timeout=PDF_EXTRACT_TIMEOUT,
-        operation="PDF extraction", temporary_files=True,
+        operation="PDF extraction",
         paper_title=paper.title,
     )
 
@@ -341,6 +329,6 @@ def extract_text_from_tar(paper: ArxivResult) -> str | None:
         _extract_text_from_tar_worker,
         (source_url, paper.entry_id, paper.title),
         timeout=TAR_EXTRACT_TIMEOUT,
-        operation="Tar extraction", temporary_files=True,
+        operation="Tar extraction",
         paper_title=paper.title,
     )

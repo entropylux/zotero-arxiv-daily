@@ -9,34 +9,6 @@ from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
 from zotero_arxiv_daily.protocol import CorpusPaper
 
 
-def test_preview_selects_only_top_five_without_delivery(config, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    from tests.canned_responses import make_sample_paper, make_sample_corpus
-    from zotero_arxiv_daily.delivery import DeliveryState
-    from zotero_arxiv_daily.protocol import Paper
-    executor = Executor.__new__(Executor)
-    config.executor.max_paper_num = 5
-    executor.config = config
-    executor.delivery = DeliveryState(tmp_path)
-    executor.openai_client = None
-    executor.fetch_zotero_corpus = lambda: make_sample_corpus()
-    executor.filter_corpus = lambda papers: papers
-    papers = [make_sample_paper(url=f'https://arxiv.org/abs/2610.{i:05d}', score=float(i)) for i in range(8)]
-    executor.retrievers = {'arxiv': SimpleNamespace(retrieve_metadata=lambda: papers)}
-    executor.reranker = SimpleNamespace(rerank=lambda candidates, corpus: sorted(candidates, key=lambda p: -p.score))
-    summarized = []
-    def summarize(paper, *args):
-        summarized.append(paper.url)
-        paper.tldr = 'Summary'
-    monkeypatch.setattr(Paper, 'generate_tldr', summarize)
-    monkeypatch.setattr('zotero_arxiv_daily.executor.send_email', lambda *args: pytest.fail('Preview must not send'))
-    result = executor.run(dry_run=True)
-    assert [p.score for p in result] == [7, 6, 5, 4, 3]
-    assert len(summarized) == 5
-    assert executor.report['delivery'] == 'preview'
-    assert not (tmp_path / 'delivery.json').exists()
-
-
 # ---------------------------------------------------------------------------
 # normalize_path_patterns — migrated from test_include_path.py
 # ---------------------------------------------------------------------------
@@ -139,7 +111,6 @@ def test_fetch_zotero_corpus(config, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
 
     executor = Executor.__new__(Executor)
-    config.executor.max_paper_num = 5
     executor.config = config
     corpus = executor.fetch_zotero_corpus()
 
@@ -165,7 +136,6 @@ def test_fetch_zotero_corpus_paper_with_zero_collections(config, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
 
     executor = Executor.__new__(Executor)
-    config.executor.max_paper_num = 5
     executor.config = config
     corpus = executor.fetch_zotero_corpus()
 
@@ -218,7 +188,7 @@ def test_run_end_to_end(config, monkeypatch):
 
     monkeypatch.setattr(
         registered_retrievers["arxiv"],
-        "retrieve_metadata",
+        "retrieve_papers",
         lambda self: retrieved,
     )
 
@@ -263,7 +233,7 @@ def test_run_no_papers_send_empty_false(config, monkeypatch):
 
     from zotero_arxiv_daily.retriever.base import registered_retrievers
 
-    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_metadata", lambda self: [])
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: [])
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
@@ -299,7 +269,7 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
 
     from zotero_arxiv_daily.retriever.base import registered_retrievers
 
-    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_metadata", lambda self: [])
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: [])
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
